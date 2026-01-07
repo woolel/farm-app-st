@@ -20,8 +20,20 @@ st.markdown("""
     <style>
     .big-font { font-size:18px !important; }
     .stExpander p { font-size: 16px; }
-    /* 표가 잘리지 않게 스타일 조정 */
-    .stMarkdown table { width: 100% !important; display: table !important; }
+    
+    /* 표 스타일 강제 적용 */
+    table {
+        width: 100% !important;
+        border-collapse: collapse !important;
+    }
+    th, td {
+        padding: 8px !important;
+        border: 1px solid #ddd !important;
+        text-align: left !important;
+    }
+    th {
+        background-color: #f2f2f2 !important;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -30,13 +42,11 @@ st.markdown("""
 # ==========================================
 @st.cache_resource
 def load_resources():
-    # 1. AI 모델 로드
     model_path = './local_model' if os.path.exists('./local_model') else 'jhgan/ko-sroberta-multitask'
     
-    with st.spinner(f'AI 모델 로딩 중... ({model_path})'):
+    with st.spinner(f'시스템 로딩 중... ({model_path})'):
         model = SentenceTransformer(model_path)
     
-    # 2. DuckDB 연결
     if not os.path.exists('farming_granular.duckdb'):
         return None, None
         
@@ -51,25 +61,28 @@ def load_resources():
 model, con = load_resources()
 
 if con is None:
-    st.error("❌ 'farming_granular.duckdb' 파일이 없습니다. GitHub 업로드 여부를 확인하세요.")
+    st.error("❌ 'farming_granular.duckdb' 파일이 없습니다.")
     st.stop()
 
 # ==========================================
-# 3. 유틸리티 함수 (텍스트 정제)
+# 3. 유틸리티 함수
 # ==========================================
-def clean_text_for_display(text):
+def format_content(text):
     """
-    화면에 출력할 때 마크다운 문법 충돌을 방지하는 함수
-    1. 물결표(~)가 취소선(~~)으로 오인되지 않도록 이스케이프 처리
-    2. 불필요한 연속 공백 제거
+    1. 취소선 방지: ~ -> \~
+    2. 표 깨짐 방지: 표 앞뒤에 줄바꿈 추가
     """
     if not text: return ""
-    # 마크다운에서 ~를 그냥 쓰면 취소선이 될 수 있으므로 \~로 변환하여 문자로 강제 인식
-    safe_text = text.replace('~', '\~')
-    return safe_text
+    
+    # 취소선 방지
+    text = text.replace('~', '\~')
+    
+    # 마크다운 표가 붙어서 깨지는 것을 방지하기 위해 줄바꿈 보강
+    text = text.replace('|', ' | ') # 파이프 간격 확보
+    return f"\n{text}\n"
 
 # ==========================================
-# 4. 사이드바 설정
+# 4. 사이드바
 # ==========================================
 today = datetime.now()
 current_month = today.month
@@ -87,13 +100,13 @@ with st.sidebar:
     
     st.markdown(f"### 💡 {current_month}월 추천 키워드")
     if current_month in [12, 1, 2]:
-        tags = ["월동 관리", "한파 대비", "전정", "화재 예방", "시설 하우스"]
+        tags = ["월동 관리", "한파 대비", "전정", "화재 예방"]
     elif current_month in [3, 4, 5]:
-        tags = ["파종 준비", "못자리", "봄벌 깨우기", "냉해 예방", "꽃가루"]
+        tags = ["파종 준비", "못자리", "봄벌 깨우기", "냉해 예방"]
     elif current_month in [6, 7, 8]:
-        tags = ["장마 대비", "탄저병", "혹서기", "응애 방제", "배수로"]
+        tags = ["장마 대비", "탄저병", "응애 방제", "배수로"]
     else: 
-        tags = ["수확 시기", "건조 관리", "가을 걷이", "월동 준비", "김장"]
+        tags = ["수확 시기", "건조 관리", "가을 걷이", "월동 준비"]
 
     if 'search_query' not in st.session_state:
         st.session_state.search_query = ""
@@ -110,38 +123,38 @@ st.title(f"📅 {current_month}월 {today.day}일, 농사 브리핑")
 with st.container():
     st.markdown("### 🌤️ 지난 3년, 오늘 이맘때 핵심 정보")
     
-    # [SQL] 목차 제거 및 데이터 조회
+    # [SQL 수정] 과도한 필터('제1장' 등) 제거하여 2025년 기상 정보 확보
     history_sql = f"""
         SELECT year, category, content 
         FROM farming 
         WHERE month = ? 
+        -- 기본적인 노이즈만 제거 (목차 점선, 명시적 목차 단어)
         AND content NOT LIKE '%····%'
         AND content NOT LIKE '%목 차%'
-        AND content NOT LIKE '%제1장%'
         AND category NOT IN ('목차')
         ORDER BY year DESC
-        LIMIT 100
+        LIMIT 150 -- 데이터를 충분히 가져옴
     """
     history_data = con.execute(history_sql, [current_month]).fetchall()
     
     if history_data:
         history_by_year = {}
         
-        # [우선순위 정렬 함수] 기상 > 요약 > 나머지
+        # [우선순위 정렬] 기상, 농업정보 -> 요약 -> 나머지
         def get_priority(cat_name):
-            if '기상' in cat_name: return 0
+            if '기상' in cat_name or '농업' in cat_name: return 0
             if '요약' in cat_name: return 1
-            if '핵심' in cat_name: return 2
             return 99
 
         for year, cat, content in history_data:
             if year not in history_by_year:
                 history_by_year[year] = []
             
-            # [Python 필터링] 복잡한 목차 테이블 제거
-            if content.count('|') > 5 and ('제1장' in content or '농업정보' in content):
+            # [Python 필터] 목차 테이블 정밀 제거 (파이프가 많고 숫자가 나열된 경우)
+            # 표 내용 중에 '페이지'나 '쪽' 같은 단어가 있으면 목차일 확률 높음
+            if content.count('|') > 3 and ('페이지' in content or '쪽' in content):
                 continue
-            
+
             if len(history_by_year[year]) >= 5: continue
             
             # 중복 제거
@@ -150,35 +163,35 @@ with st.container():
 
             history_by_year[year].append((cat, content))
 
-        # 연도별 정렬 및 출력
+        # 연도별 출력
         available_years = sorted(history_by_year.keys(), reverse=True)
         
         if not available_years:
              st.warning("표시할 유효한 데이터가 없습니다.")
         else:
-            # [레이아웃] 세로 배치 (표 깨짐 방지)
             for i, year in enumerate(available_years):
                 if i >= 3: break 
                 
                 st.markdown(f"#### 📆 {year}년 {current_month}월")
                 
-                # 기상 우선 정렬
+                # 우선순위 정렬 적용
                 items = sorted(history_by_year[year], key=lambda x: get_priority(x[0]))
                 
                 for category, full_content in items:
-                    # [텍스트 정제] 취소선 방지 적용
-                    safe_content = clean_text_for_display(full_content)
+                    safe_content = format_content(full_content)
                     
-                    # 미리보기 텍스트
-                    clean_text = safe_content.replace('\n', ' ').strip()
-                    preview_text = clean_text[:40] + "..." if len(clean_text) > 40 else clean_text
+                    # 미리보기 텍스트 (줄바꿈 제거)
+                    clean_one_line = full_content.replace('\n', ' ').replace('|', ' ').strip()
+                    preview_text = clean_one_line[:40] + "..." if len(clean_one_line) > 40 else clean_one_line
                     
-                    if '기상' in category: icon = "☁️"
+                    # 아이콘 설정
+                    if '기상' in category or '농업' in category: icon = "☁️"
                     elif '요약' in category: icon = "📝"
                     else: icon = "📌"
 
                     with st.expander(f"{icon} **[{category}]** {preview_text}", expanded=False):
-                        st.markdown(safe_content)
+                        # [핵심 수정] st.info 제거하고 st.markdown 사용 (표 깨짐 해결)
+                        st.markdown(safe_content, unsafe_allow_html=True)
                 
                 st.markdown("---") 
 
@@ -228,16 +241,16 @@ if query:
         for row in results:
             score, cat, year, mon, content = row
             score_badge = "🟢 높음" if score > 0.6 else "🟡 보통"
-            
-            # [텍스트 정제] 취소선 방지 적용
-            safe_content = clean_text_for_display(content)
+            safe_content = format_content(content)
             
             with st.container():
                 st.markdown(f"#### [{cat}] {year}년 {mon}월 정보 <small>({score_badge})</small>", unsafe_allow_html=True)
                 
-                # 검색어 하이라이팅
-                highlighted_content = safe_content.replace(query, f":red[**{query}**]")
-                st.info(highlighted_content)
+                # 검색어 하이라이팅 (마크다운 충돌 방지 위해 단순화)
+                st.markdown(f"💡 **관련 검색어:** {query}")
+                
+                # [핵심 수정] st.info 대신 st.markdown 사용
+                st.markdown(safe_content, unsafe_allow_html=True)
                 st.caption("---")
 
 # ==========================================
