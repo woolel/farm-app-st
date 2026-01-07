@@ -95,6 +95,7 @@ with st.sidebar:
         if st.button(f"#{tag}", use_container_width=True):
             st.session_state.search_query = tag
 
+# [수정된 코드] app_dashboard.py 의 4번 섹션 부분
 # ==========================================
 # 4. 메인 화면: 오늘의 농사 브리핑 (자동 분석)
 # ==========================================
@@ -102,60 +103,68 @@ st.title(f"📅 {current_month}월 {today.day}일, 농사 브리핑")
 
 with st.expander("🌤️ 지난 3년, 오늘 이맘때 기상과 핵심 정보 보기 (클릭)", expanded=True):
     
-    # [SQL 개선] 목차 제거, LIMIT 증가, 노이즈 필터링
+    # [SQL 긴급 수정] 필터 조건을 대폭 완화했습니다.
     history_sql = f"""
         SELECT year, category, content 
         FROM farming 
         WHERE month = ? 
-        AND category IN ('기상', '요약', '농업정보') 
-        AND content NOT LIKE '%····%'   -- 목차 점선 제거
-        AND content NOT LIKE '%목 차%'  -- 목차 텍스트 제거
-        AND content NOT LIKE '%|---%'   -- 표 구분선 제거
+        -- 카테고리 제한을 풀어서 일단 다 가져옵니다.
+        -- 목차 점선(...)과 '목 차' 글자만 거릅니다.
+        AND content NOT LIKE '%····%'
+        AND content NOT LIKE '%목 차%'
         ORDER BY year DESC, category ASC
-        LIMIT 50 -- 데이터를 충분히 가져와서 Python에서 연도별 균형 맞춤
+        LIMIT 100 -- 데이터 확보를 위해 100개로 늘림
     """
     history_data = con.execute(history_sql, [current_month]).fetchall()
     
     if history_data:
-        # 연도별 데이터 정리 (카테고리, 전체내용) 튜플로 저장
+        # 연도별 데이터 정리
         history_by_year = {}
+        
+        # [Python 필터링] 여기서 원하는 카테고리만 골라냅니다.
+        # 화면에 보여주고 싶은 '우선순위 카테고리'를 정합니다.
+        target_cats = ['요약', '기상', '농업정보', '주간기상', '핵심기술', '벼', '채소', '양봉']
         
         for year, cat, content in history_data:
             if year not in history_by_year:
                 history_by_year[year] = []
             
-            # 연도별 최대 3개까지만 담기 (스크롤 폭주 방지)
-            if len(history_by_year[year]) >= 3:
+            # 1. 너무 짧은 데이터(오류 등) 건너뛰기
+            if len(content) < 10: continue
+
+            # 2. (선택사항) 특정 카테고리만 보고 싶다면 주석 해제
+            # if cat not in target_cats: continue
+            
+            # 연도별 최대 5개까지만 담기
+            if len(history_by_year[year]) >= 5:
                 continue
             
-            # 튜플 형태로 저장 (나중에 전체 내용을 보여주기 위함)
             history_by_year[year].append((cat, content))
 
-        # 화면 출력
+        # 화면 출력 (이전과 동일)
         available_years = sorted(history_by_year.keys(), reverse=True)
         
         if not available_years:
-             st.warning("표시할 유효한 데이터가 없습니다.")
+             st.warning(f"{current_month}월에 해당하는 데이터를 찾았으나, 필터링 결과 표시할 내용이 없습니다.")
         else:
-            # 연도 개수에 맞춰 컬럼 생성 (최대 3개)
             cols = st.columns(len(available_years))
 
             for i, year in enumerate(available_years):
-                if i >= 3: break # 최대 3년치만 표시
+                if i >= 3: break 
                 
                 with cols[i]:
                     st.subheader(f"📆 {year}년") 
                     
                     for category, full_content in history_by_year[year]:
-                        # 미리보기용 요약 (25자)
                         clean_text = full_content.replace('\n', ' ').strip()
                         preview_text = clean_text[:25] + "..." if len(clean_text) > 25 else clean_text
                         
-                        # [UI 개선] Expander를 사용하여 내용 잘림 방지
                         with st.expander(f"**[{category}]** {preview_text}", expanded=False):
-                            st.info(full_content) # 전체 내용 표시
+                            st.info(full_content)
     else:
-        st.info("이맘때의 과거 데이터가 충분하지 않습니다.")
+        # 디버깅용 메시지: 실제 데이터가 없는지 확인
+        st.error(f"DB 조회 결과가 0건입니다. (검색 조건: month={current_month})")
+        st.caption("팁: DB에 'month' 컬럼이 제대로 들어갔는지 확인이 필요할 수 있습니다.")
 
 # ==========================================
 # 5. 시맨틱 검색 엔진 (심층 검색)
