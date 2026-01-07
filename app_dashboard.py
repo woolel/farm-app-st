@@ -189,7 +189,8 @@ with st.container():
     if history_data:
         history_by_year = {}
         
-        # [우선순위 로직] 날짜 매칭되는 요약 > 일반 요약 > 기상/농업 > 나머지
+        # [우선순위 로직] 날짜 매칭되는 요약 > 기상/농업 > 나머지
+        # '이번주'의 기준을 조금 넓게(+- 7일) 잡아서 가장 가까운 요약표를 찾음
         def get_priority(item, current_date):
             _id, _year, _cat, _content = item
             
@@ -202,16 +203,21 @@ with st.container():
                         start_dt = datetime.strptime(dates[0], "%Y-%m-%d")
                         end_dt = datetime.strptime(dates[1], "%Y-%m-%d")
                         
-                        # 데이터의 연도에 맞는 '이번 글'의 타겟 날짜 생성
                         target_year = int(_year)
-                        # 현재 조회중인 날짜(current_date)의 월/일을 가져옴
                         check_date = datetime(target_year, current_date.month, current_date.day)
                         
+                        # [유연한 매칭] 해당 주간이거나, 주간 시작/끝에서 7일 이내면 허용
+                        # 이렇게 하면 1월 7일인데 1월 8일 시작 데이터도 매칭됨
+                        diff_start = abs((check_date - start_dt).days)
+                        diff_end = abs((check_date - end_dt).days)
+                        
                         if start_dt <= check_date <= end_dt:
-                            return 0 # 날짜 딱 맞는 주간 요약
+                            return 0 # 정확히 포함
+                        elif diff_start <= 7 or diff_end <= 7:
+                            return 0 # 근처 1주일 이내면 허용
                 except Exception:
                     pass
-                return 1 # 날짜 안 맞아도 요약이면 차순위
+                return 100 # 날짜 안 맞는 요약은 아예 뒤로 보내거나 숨김
                 
             if '기상' in _cat or '농업' in _cat: return 2
             return 99
@@ -222,29 +228,38 @@ with st.container():
             if year not in history_by_year:
                 history_by_year[year] = []
             
-            # [필터링 1] 목차 테이블 정밀 제거
-            if content.count('|') > 3 and ('페이지' in content or '쪽' in content):
+            # [필터링 1] 목차/차례 명시적 제거 (강력 필터)
+            if '목 차' in content or '목차' in content:
                 continue
 
-            # [필터링 2] 내용 없는 껍데기 제거 (제목만 있는 경우 등)
-            # 줄바꿈, 파이프 제거 후 순수 텍스트 길이 체크
+            # [필터링 2] 내용 없는 껍데기 제거
             clean_text = content.replace('\n', '').replace('|', '').replace('-', '').strip()
             
-            # "### 제1장 벼" 같은 헤더만 있는 경우 대략 10~20자 내외
-            if len(clean_text) < 40: 
-                # 1. '###'로 시작하고
-                # 2. '제'와 '장'이 포함되어 있으면 목차 헤더일 확률 매우 높음 (예: ### 제1장 벼)
-                # 3. 혹은 '###' 만 있고 내용이 거의 없는 경우
-                if '###' in content:
-                     # 진짜 헤더인지 확인 (제x장 패턴)
-                     if ('제' in content and '장' in content) or len(clean_text) < 15:
-                         continue
+            # "### 제 7장 제7장 특용작물" 같은 반복 헤더 제거
+            # 헤더(###)만 있고 내용 길이가 짧거나, 의미있는 문장이 없는 경우
+            is_header_only = False
+            if '###' in content:
+                 # 제x장 패턴이 있고 길이가 50자 미만이면 제낌
+                 if ('제' in content and '장' in content) and len(clean_text) < 60:
+                     is_header_only = True
+                 # '기상' 같은 단일 헤더도 짧으면 제낌
+                 elif len(clean_text) < 30:
+                     is_header_only = True
+            
+            if is_header_only: continue
 
             # 중복 제거 (내용 기준)
-            if any(item[3] == content for item in history_by_year[year]):
+            if any(item[2] == content for item in history_by_year[year]):
                 continue
                 
-            history_by_year[year].append(row)
+            priority = get_priority(row, today)
+            
+            # [특수 필터] 날짜 안 맞는 요약은 브리핑에서 아예 제외 (혼란 방지)
+            if '요약' in cat and priority > 0:
+                continue
+            
+            # 우선순위와 함께 저장 (Priority, Category, Content)
+            history_by_year[year].append((priority, cat, content))
 
         # 연도별 출력
         available_years = sorted(history_by_year.keys(), reverse=True)
@@ -255,16 +270,18 @@ with st.container():
             for i, year in enumerate(available_years):
                 if i >= 3: break 
                 
+                # 우선순위 정렬 (Prio 0 -> ... -> 99)
+                items = sorted(history_by_year[year], key=lambda x: x[0])
+                
+                # 데이터가 없으면 스킵
+                if not items: continue
+
                 st.markdown(f"#### 📆 {year}년 {current_month}월")
                 
-                # 우선순위 정렬 적용
-                # 5개까지만 표출 (정렬 후)
-                items = sorted(history_by_year[year], key=lambda x: get_priority(x, today))
-                
-                # 상위 5개 중, 내용이 실한 것만 보여줌
+                # 상위 5개 표출
                 final_items = items[:5]
                 
-                for _, _, category, full_content in final_items:
+                for _, category, full_content in final_items:
                     safe_content = format_content(full_content)
                     
                     # 미리보기 텍스트
