@@ -54,6 +54,12 @@ def load_resources():
     try:
         con.execute("INSTALL vss; LOAD vss;")
         con.execute("INSTALL fts; LOAD fts;")
+        
+        # FTS 인덱스 존재 여부 확인 (진단용)
+        idx_check = con.execute("PRAGMA show_indexes;").fetchall()
+        fts_exists = any('fts_main_farming' in str(row) for row in idx_check)
+        if not fts_exists:
+            st.error("⚠️ 데이터베이스에 FTS 인덱스가 없습니다. 'embed.py'를 통해 생성된 최신 DB 파일을 업로드해주세요.")
     except Exception as e:
         st.warning(f"DuckDB 확장 로드 실패 (검색 기능이 제한될 수 있음): {e}")
         
@@ -84,7 +90,7 @@ if con is None:
 # 3. 유틸리티 함수
 # ==========================================
 def format_content(text):
-    """
+    r"""
     1. 취소선 방지: ~ -> \~
     2. 표 깨짐 방지: 표 앞뒤에 줄바꿈 추가
     """
