@@ -57,9 +57,9 @@ def load_resources():
         
         # FTS 인덱스 존재 여부 확인 (진단용 - 독립된 try-except로 감쌈)
         try:
-            # PRAGMA show_indexes 대신 더 호환성 높은 duckdb_indexes 뷰 사용
-            idx_check = con.execute("SELECT * FROM duckdb_indexes;").fetchall()
-            fts_exists = any('fts_main_farming' in str(row) for row in idx_check)
+            # FTS 인덱스는 별도의 스키마(fts_main_farming)로 생성되므로 스키마 목록을 확인
+            schemas = con.execute("SELECT schema_name FROM duckdb_schemas;").fetchall()
+            fts_exists = any('fts_main_farming' in str(row) for row in schemas)
             if not fts_exists:
                 st.error("⚠️ 데이터베이스에 FTS 인덱스가 없습니다. 'embed.py'를 통해 생성된 최신 DB 파일을 업로드해주세요.")
         except Exception:
