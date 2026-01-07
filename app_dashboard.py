@@ -53,9 +53,9 @@ def load_resources():
     con = duckdb.connect('farming_granular.duckdb', read_only=True)
     try:
         con.execute("INSTALL vss; LOAD vss;")
-        con.execute("INSTALL fts; LOAD fts;") # FTS 확장 로드 추가
-    except Exception:
-        pass 
+        con.execute("INSTALL fts; LOAD fts;")
+    except Exception as e:
+        st.warning(f"DuckDB 확장 로드 실패 (검색 기능이 제한될 수 있음): {e}")
         
     return model, con
 
@@ -91,7 +91,7 @@ def format_content(text):
     if not text: return ""
     
     # 취소선 방지
-    text = text.replace('~', '\~')
+    text = text.replace('~', r'\~')
     
     # 마크다운 표가 붙어서 깨지는 것을 방지하기 위해 줄바꿈 보강
     text = text.replace('|', ' | ') # 파이프 간격 확보
