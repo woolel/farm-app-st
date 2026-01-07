@@ -242,7 +242,7 @@ with st.container():
                      continue
             
             # 내용 중복 제거
-            if any(item[2] == content for item in history_by_year[year]):
+            if any(item['content'] == content for item in history_by_year[year]):
                 continue
 
             score, distance = get_date_score(row, today)
