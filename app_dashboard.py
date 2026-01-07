@@ -15,18 +15,47 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# CSS 스타일 커스텀 (폰트 및 테이블 스타일 강제 적용)
 st.markdown("""
     <style>
+    /* 1. 한글 폰트 강제 적용 (깨짐 방지 보완) */
+    html, body, [class*="css"] {
+        font-family: "Pretendard", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif !important;
+    }
+
+    /* 2. 텍스트 크기 조정 */
     .big-font { font-size:18px !important; }
-    .stExpander p { font-size: 16px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    .stExpander p { font-size: 16px; line-height: 1.6; }
     
-    /* 테이블 스타일 보정 */
-    table { width: 100% !important; border-collapse: collapse !important; }
-    th, td { padding: 8px !important; border: 1px solid #ddd !important; text-align: left !important; }
-    th { background-color: #f9f9f9 !important; font-weight: bold; }
+    /* 3. 테이블 스타일 (깨짐 방지 및 가독성) */
+    table { 
+        width: 100% !important; 
+        border-collapse: collapse !important; 
+        margin-bottom: 1rem !important; 
+        display: block; /* 가로 스크롤 허용 */
+        overflow-x: auto;
+    }
+    th, td { 
+        padding: 8px 12px !important; 
+        border: 1px solid #ddd !important; 
+        text-align: left !important; 
+        font-size: 15px !important; 
+        white-space: pre-wrap; /* 줄바꿈 허용 */
+    }
+    th { 
+        background-color: #f8f9fa !important; 
+        font-weight: bold; 
+        color: #333;
+    }
     
-    /* 하이라이트 스타일 */
-    .highlight { background-color: #fff9c4; padding: 2px 4px; border-radius: 4px; font-weight: bold; }
+    /* 4. 검색어 하이라이트 스타일 */
+    .highlight { 
+        background-color: #fff9c4; 
+        padding: 2px 4px; 
+        border-radius: 4px; 
+        font-weight: bold; 
+        color: #d32f2f;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -58,7 +87,6 @@ def load_resources():
         # FTS 인덱스 상태 확인
         schemas = con.execute("SELECT schema_name FROM duckdb_schemas;").fetchall()
         fts_status = "ok"
-        # 'farming' 테이블에 대한 FTS 인덱스 스키마 이름은 보통 'fts_main_farming'
         if not any('fts_main_farming' in str(row) for row in schemas):
             fts_status = "fts_missing"
             
@@ -82,32 +110,58 @@ def get_monthly_trends(month, _con):
     except:
         return []
 
-# 리소스 초기화
+# 리소스 초기화 실행
 model, con, status = load_resources()
 
-# 에러 핸들링
+# 초기화 에러 핸들링
 if isinstance(status, str) and "error" in status:
     st.error(f"시스템 초기화 오류: {status}")
     st.stop()
 
 if status == "file_not_found":
-    st.error("❌ 'farming_granular.duckdb' 데이터베이스 파일이 없습니다. 실행 경로를 확인해주세요.")
+    st.error("❌ 'farming_granular.duckdb' 데이터베이스 파일이 없습니다. DB 생성 코드를 먼저 실행해주세요.")
     st.stop()
 
 if status == "fts_missing":
     st.warning("⚠️ 검색 인덱스(FTS)가 감지되지 않아 키워드 검색 성능이 저하될 수 있습니다.")
 
 # ==========================================
-# 3. 유틸리티 함수
+# 3. 유틸리티 함수 (테이블 깨짐 수정 로직)
 # ==========================================
 def format_content(text):
-    """마크다운 렌더링을 위한 텍스트 전처리"""
+    """
+    마크다운 렌더링을 위한 텍스트 전처리
+    - 테이블 구조가 깨지지 않도록 줄바꿈 및 파이프(|) 보정
+    """
     if not text: return ""
-    text = text.replace('~', r'\~') # 취소선 방지
-    # 표가 문장에 붙어 나올 때 강제 줄바꿈
-    text = text.replace('.|', '.\n|').replace(':|', ':\n|')
-    text = text.replace('|', ' | ') # 파이프 간격 조정
-    return text
+    
+    # 1. 취소선 방지 (~ -> \~)
+    text = text.replace('~', r'\~') 
+    
+    # 2. 테이블 감지 및 포맷팅 강화
+    lines = text.split('\n')
+    formatted_lines = []
+    
+    for i, line in enumerate(lines):
+        line = line.strip()
+        
+        # 테이블 행으로 추정되는 경우 (파이프가 있고 길이가 충분함)
+        if '|' in line and len(line) > 3:
+            # 파이프 앞뒤에 공백 강제 추가 (마크다운 파서 인식 도움)
+            # 기존 파이프를 ' | '로 치환하되, 중복 공백은 정리
+            processed_line = line.replace('|', ' | ')
+            processed_line = re.sub(r'\s+\|\s+', ' | ', processed_line) 
+            
+            # 테이블의 시작이거나(헤더), 이전 줄이 일반 텍스트였다면 빈 줄 추가하여 분리
+            if i > 0 and '|' not in lines[i-1]:
+                formatted_lines.append("") 
+            
+            formatted_lines.append(processed_line)
+        else:
+            # 일반 텍스트
+            formatted_lines.append(line)
+            
+    return '\n'.join(formatted_lines)
 
 # ==========================================
 # 4. 사이드바 UI
@@ -128,7 +182,7 @@ with st.sidebar:
     
     st.divider()
     
-    # 추천 키워드 로직
+    # 월별 추천 키워드
     keywords_map = {
         (12, 1, 2): ["월동 관리", "한파", "전정", "화재 예방"],
         (3, 4, 5): ["파종", "육묘", "냉해", "꽃가루 매개"],
@@ -143,17 +197,15 @@ with st.sidebar:
             
     st.markdown(f"### 💡 {current_month}월 추천 검색어")
     
-    # 세션 상태 초기화
     if 'search_query' not in st.session_state:
         st.session_state.search_query = ""
 
-    # 버튼 클릭 시 검색어 입력창에 값 주입
     cols = st.columns(2)
     for i, tag in enumerate(recommendations):
+        # 버튼 클릭 시 세션 스테이트에 검색어 저장
         if cols[i % 2].button(f"#{tag}", key=f"btn_{tag}", use_container_width=True):
             st.session_state.search_query = tag
 
-    # 트렌드 위젯
     st.divider()
     st.markdown("📊 **이달의 데이터 분포**")
     trends = get_monthly_trends(current_month, con)
@@ -169,7 +221,7 @@ with st.sidebar:
 st.subheader(f"📅 {current_month}월의 과거 농사 기록 (최근 3년)")
 
 with st.expander("🔻 지난 3년간 오늘 이맘때의 주요 정보 보기", expanded=True):
-    # SQL: 날짜 매칭을 위해 ID도 가져옴
+    # SQL: 기본적인 월별 데이터 조회
     history_sql = """
         SELECT id, year, category, content 
         FROM farming 
@@ -180,61 +232,58 @@ with st.expander("🔻 지난 3년간 오늘 이맘때의 주요 정보 보기",
     """
     try:
         rows = con.execute(history_sql, [current_month]).fetchall()
-        
-        # Python 레벨에서 날짜 정밀 필터링 (오늘 날짜와 가까운 주차만 선별)
         valid_items = []
         seen_contents = set()
 
         for r in rows:
             rid, ryear, rcat, rcontent = r
             
-            # 내용 중복 제거 (약간의 전처리 후 해시 비교)
+            # 내용 중복 제거 (공백 제거 후 앞부분 비교)
             content_sig = re.sub(r'\s+', '', rcontent)[:50]
             if content_sig in seen_contents: continue
             seen_contents.add(content_sig)
 
-            # 날짜 파싱 (ID: YYYY-MM-DD~YYYY-MM-DD)
+            # 날짜 정밀 비교 (오늘 날짜 기준 ±3일 포함 여부)
             try:
                 start_str, end_str = rid.split('~')
+                # 연도는 무시하고 월/일 비교를 위해 현재 연도로 치환
                 s_date = datetime.strptime(start_str, "%Y-%m-%d").replace(year=today.year)
                 e_date = datetime.strptime(end_str, "%Y-%m-%d").replace(year=today.year)
                 
-                # 오늘 날짜가 기간 내에 있거나, 앞뒤 3일 이내인 경우
-                # (연도 무시하고 월/일만 비교하기 위해 year를 통일)
                 target_date = today
                 
-                # 기간 겹침 확인
+                # 기간 내 포함되거나, 기간과 3일 이내로 가까운지 확인
                 if s_date <= target_date <= e_date:
                     is_match = True
                 else:
-                    # 근접 날짜 확인 (오차 3일 허용)
                     days_diff = min(abs((target_date - s_date).days), abs((target_date - e_date).days))
                     is_match = days_diff <= 3
                 
                 if is_match:
                     valid_items.append(r)
             except:
-                continue # 날짜 형식이 안 맞으면 패스
+                continue # 날짜 포맷 에러 시 스킵
 
         if valid_items:
-            # 연도별 그룹화
+            # 연도별로 그룹화하여 출력
             grouped = {}
             for item in valid_items:
                 y = item[1]
                 if y not in grouped: grouped[y] = []
                 grouped[y].append(item)
             
-            # 최신 연도순 출력 (최대 3개 연도)
+            # 최신 연도순, 최대 3개 연도만 표시
             for y in sorted(grouped.keys(), reverse=True)[:3]:
                 st.markdown(f"**📌 {y}년 기록**")
                 cols = st.columns(2)
-                # 연도별 최대 4개 항목만 노출
-                for idx, item in enumerate(grouped[y][:4]):
+                for idx, item in enumerate(grouped[y][:4]): # 연도별 최대 4개
                     cat, content = item[2], item[3]
                     short_content = content.split('\n')[0][:30] + "..."
+                    
                     with cols[idx % 2]:
                         with st.popover(f"[{cat}] {short_content}"):
-                            st.markdown(format_content(content))
+                            # [핵심] 테이블 깨짐 방지 함수 적용
+                            st.markdown(format_content(content), unsafe_allow_html=True)
         else:
             st.info("이맘때와 정확히 일치하는 과거 주간 정보가 없습니다.")
             
@@ -244,11 +293,11 @@ with st.expander("🔻 지난 3년간 오늘 이맘때의 주요 정보 보기",
 st.divider()
 
 # ==========================================
-# 6. 시맨틱 하이브리드 검색
+# 6. 시맨틱 하이브리드 검색 (오류 수정됨)
 # ==========================================
 st.header("🔍 농업 지식 검색")
 
-# 검색 폼 (Enter 키 리로드 방지 및 UX 개선)
+# 검색 폼 (엔터 키 리로드 방지)
 with st.form("search_form"):
     col1, col2 = st.columns([4, 1])
     with col1:
@@ -262,39 +311,40 @@ with st.form("search_form"):
         search_btn = st.form_submit_button("검색 🚀", use_container_width=True)
 
 if search_btn and query_input:
-    # 1. 카테고리 필터 SQL 생성
+    # 카테고리 필터 SQL 생성
     cat_filter_sql = ""
     if selected_cats:
         cat_list_str = "', '".join(selected_cats)
         cat_filter_sql = f"AND category IN ('{cat_list_str}')"
 
-    # 2. 임베딩 생성
     with st.spinner("AI가 문서를 분석 중입니다..."):
+        # 질문 임베딩 생성
         query_vector = model.encode(query_input).tolist()
         
-        # 3. 하이브리드 검색 쿼리 (점수 로직 개선)
-        # score (Vector): 0.0 ~ 1.0
-        # fts_score (BM25): 0.0 ~ N (보통 10~50 사이가 나옴)
-        # -> 벡터 유사도 0.5 이상인 것 중에서, 키워드 매칭 점수를 로그 스케일로 더해서 정렬
+        # ------------------------------------------------------------------
+        # [수정된 SQL] Binder Error 해결을 위한 Nested Query 구조
+        # 안쪽(sub)에서 점수를 계산하고, 바깥쪽에서 정렬(ORDER BY)합니다.
+        # ------------------------------------------------------------------
         search_sql = f"""
         SELECT 
-            score, 
-            fts_main_farming.match_bm25(pk, ?) as fts_score,
+            vector_score,
+            fts_score,
             category, year, month, content
         FROM (
             SELECT 
-                array_cosine_similarity(embedding, ?::FLOAT[768]) AS score,
-                pk, category, year, month, content
+                array_cosine_similarity(embedding, ?::FLOAT[768]) AS vector_score,
+                fts_main_farming.match_bm25(pk, ?) AS fts_score,
+                category, year, month, content
             FROM farming
             WHERE 1=1 {cat_filter_sql}
-        ) 
-        WHERE score > 0.45 -- 최소 관련성 필터
-        ORDER BY (score * 10 + ln(fts_score + 1)) DESC
+        ) sub
+        WHERE vector_score > 0.45 -- 최소 관련성 필터
+        ORDER BY (vector_score * 10 + ln(fts_score + 1)) DESC
         LIMIT 5
         """
         
         try:
-            results = con.execute(search_sql, [query_input, query_vector]).fetchall()
+            results = con.execute(search_sql, [query_vector, query_input]).fetchall()
             
             if not results:
                 st.warning("🤔 검색 결과가 없습니다. 질문을 구체적으로 바꾸거나 필터를 해제해보세요.")
@@ -304,23 +354,22 @@ if search_btn and query_input:
                 for row in results:
                     v_score, f_score, cat, yr, mn, body = row
                     
-                    # 관련도 배지 표시
-                    badge_color = "green" if v_score > 0.65 else "orange"
+                    # 뱃지 색상 및 타입 결정
+                    badge_color = "#4CAF50" if v_score > 0.65 else "#FF9800" # Green vs Orange
                     match_type = "AI+키워드" if f_score > 0 else "AI추론"
                     
                     with st.container(border=True):
                         st.markdown(f"""
                         <div style='display:flex; justify-content:space-between; align-items:center;'>
                             <span class='big-font'><b>[{cat}]</b> {yr}년 {mn}월 자료</span>
-                            <span style='color:{badge_color}; font-size:0.8em;'>
+                            <span style='color:{badge_color}; font-weight:bold; font-size:0.9em;'>
                                 유사도 {v_score:.2f} ({match_type})
                             </span>
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        # 검색어 하이라이트 (단순 문자열 치환)
+                        # 내용 포맷팅 및 하이라이트
                         highlighted_body = format_content(body)
-                        # 원본 쿼리 단어들로 하이라이팅 시도
                         for word in query_input.split():
                             if len(word) > 1:
                                 highlighted_body = highlighted_body.replace(word, f"<span class='highlight'>{word}</span>")
@@ -329,7 +378,6 @@ if search_btn and query_input:
                         
         except Exception as e:
             st.error(f"검색 처리 중 오류가 발생했습니다: {e}")
-            # 디버깅용: st.write(e)
 
 # ==========================================
 # 7. 푸터
