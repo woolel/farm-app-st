@@ -42,6 +42,7 @@ except Exception as e:
 # 테이블 스키마 정의 (카테고리별로 쪼개진 구조)
 con.execute(f"""
     CREATE TABLE farming (
+        pk BIGINT PRIMARY KEY, -- 고유 프라이머리 키 (FTS 필수)
         id TEXT,
         year TEXT,
         month INTEGER,
@@ -129,18 +130,35 @@ if texts_to_embed:
     # df의 컬럼 순서가 테이블과 다를 수 있으므로 명시적으로 매핑하거나 순서를 맞춤
     # 여기서는 DataFrame 키 순서와 테이블 정의가 거의 같으므로 바로 삽입 시도
     # 안전하게 컬럼 순서 재배열:
-    df = df[['id', 'year', 'month', 'category', 'content', 'embedding']]
+    # pk 고유값 할당 및 컬럼 순서 재배열
+    df['pk'] = range(len(df))
+    df = df[['pk', 'id', 'year', 'month', 'category', 'content', 'embedding']]
     
+    # 3) DuckDB에 통째로 입력
     print("   -> DB에 데이터 입력 중 (Bulk Insert)...")
     con.execute("INSERT INTO farming SELECT * FROM df")
     
     # 4) 인덱스 생성
-    print("🚀 [5/5] 벡터 검색 인덱스(HNSW) 생성 중...")
+    # [극대화 1] HNSW 파라미터 튜닝 (정밀도 향상)
+    # M: 클수록 정밀하지만 메모리 사용량 증가 (기본 16, 추천 32)
+    # ef_construction: 인덱스 생성 시 탐색 범위 (기본 100, 추천 200)
+    print("🚀 [5/5] 검색 최적화 인덱스 생성 중...")
     try:
+        print("   -> 벡터 인덱스(HNSW) 생성 (M=32, ef_c=200)...")
         con.execute("SET hnsw_enable_experimental_persistence = true;")
-        con.execute("CREATE INDEX idx_vector ON farming USING HNSW (embedding)")
+        con.execute("CREATE INDEX idx_vector ON farming USING HNSW (embedding) WITH (M=32, ef_construction=200);")
     except Exception as e:
-        print(f"⚠️ 인덱스 생성 경고 (데이터는 정상 저장됨): {e}")
+        print(f"⚠️ 벡터 인덱스 생성 경고: {e}")
+
+    # [극대화 2] 전문 검색(FTS) 인덱스 추가 (키워드 매칭 보완)
+    print("   -> 전문 검색(FTS) 인덱스 구축 중...")
+    try:
+        con.execute("INSTALL fts; LOAD fts;")
+        # pk를 식별자로 사용하여 FTS 인덱스 생성
+        con.execute("PRAGMA create_fts_index('farming', 'pk', 'content', 'category');")
+        print("   ✅ FTS 인덱스 생성 완료")
+    except Exception as e:
+        print(f"⚠️ FTS 인덱스 생성 경고: {e}")
 
 else:
     print("⚠️ 처리할 데이터가 없습니다.")

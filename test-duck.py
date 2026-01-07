@@ -40,9 +40,9 @@ else:
     print("   ⚠️ 기호가 포함된 데이터를 찾지 못했습니다 (데이터 특성일 수 있음).")
 
 # ==========================================
-# 4. 검색 성능 테스트 (핵심!)
+# 4. 하이브리드 검색 성능 테스트 (핵심!)
 # ==========================================
-print("\n🔎 [3. 시맨틱 검색 테스트]")
+print("\n🔎 [3. 하이브리드 검색 테스트 (VSS + FTS)]")
 query = "겨울철 꿀벌 관리할 때 주의할 점은?"
 print(f"   ❓ 질문: {query}")
 print("-" * 60)
@@ -50,31 +50,36 @@ print("-" * 60)
 # 1) 질문 임베딩
 query_vector = model.encode(query).tolist()
 
-# 2) 벡터 검색 실행
+# 2) 하이브리드 검색 실행
 sql = f"""
-SELECT score, category, year, month, content
+SELECT final_score, score, fts_score, category, year, month, content
 FROM (
-    SELECT array_cosine_similarity(embedding, ?::FLOAT[768]) AS score, *
-    FROM farming
+    SELECT 
+        (0.7 * score + 0.3 * fts_score) as final_score,
+        score, fts_score, category, year, month, content
+    FROM (
+        SELECT 
+            array_cosine_similarity(embedding, ?::FLOAT[768]) AS score,
+            fts_main_farming.match_bm25(pk, ?) AS fts_score,
+            *
+        FROM farming
+    )
 ) 
-WHERE score IS NOT NULL
-ORDER BY score DESC 
+WHERE final_score IS NOT NULL
+ORDER BY final_score DESC 
 LIMIT 3;
 """
 
-results = con.execute(sql, [query_vector]).fetchall()
+results = con.execute(sql, [query_vector, query]).fetchall()
 
 # 3) 결과 출력
 for i, row in enumerate(results):
-    score = row[0]
-    category = row[1]
-    date_info = f"{row[2]}년 {row[3]}월"
-    content = row[4]
+    f_score, v_score, fts_score, category, year, mon, content = row
     
-    # 줄바꿈 제거하여 한 줄로 표시
+    date_info = f"{year}년 {mon}월"
     clean_content = content.replace('\n', ' ').replace('\r', '')
     
-    print(f"{i+1}위. [{category}] {date_info} (유사도: {score:.4f})")
+    print(f"{i+1}위. [{category}] {date_info} (합산: {f_score:.4f} | 벡터: {v_score:.4f} | FTS: {fts_score:.4f})")
     print(f"   내용: {clean_content[:120]}...")
     print("-" * 60)
 

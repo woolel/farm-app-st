@@ -58,6 +58,21 @@ def load_resources():
         
     return model, con
 
+# [극대화 3] 데이터 조회 유틸리티 (캐싱 적용)
+@st.cache_data(ttl=3600)
+def get_monthly_trends(month, _con):
+    """
+    현재 월의 주요 키워드 트렌드 분석 (SQL 집계)
+    """
+    sql = """
+        SELECT category, count(*) as cnt
+        FROM farming
+        WHERE month = ?
+        GROUP BY category
+        ORDER BY cnt DESC
+    """
+    return _con.execute(sql, [month]).fetchall()
+
 model, con = load_resources()
 
 if con is None:
@@ -119,6 +134,16 @@ with st.sidebar:
 # 5. 메인 화면: 오늘의 농사 브리핑
 # ==========================================
 st.title(f"📅 {current_month}월 {today.day}일, 농사 브리핑")
+
+# [극대화 4] 이달의 트렌드 분석 (SQL 집계 활용)
+with st.sidebar:
+    st.divider()
+    st.markdown(f"### 📈 {current_month}월 데이터 트렌드")
+    trends = get_monthly_trends(current_month, con)
+    if trends:
+        for cat, count in trends[:5]:
+            st.caption(f"**{cat}**: {count}건의 정보")
+    st.divider()
 
 with st.container():
     st.markdown("### 🌤️ 지난 3년, 오늘 이맘때 핵심 정보")
@@ -210,30 +235,43 @@ query = st.text_input(
     key="main_search"
 )
 
+@st.cache_data(ttl=600) # 검색 결과 10분간 캐싱
+def search_farming(query, category_filter, _model, _con):
+    # 1. 질문 벡터화
+    query_vector = _model.encode(query).tolist()
+    
+    # 2. 하이브리드 검색 SQL (VSS + FTS)
+    # fts_main_farming.match_bm25를 사용하여 키워드 점수 합산
+    # 시맨틱 유사도(score)와 키워드 점수를 결합
+    sql = f"""
+    SELECT 
+        (0.7 * score + 0.3 * fts_score) as final_score,
+        category, year, month, content
+    FROM (
+        SELECT 
+            array_cosine_similarity(embedding, ?::FLOAT[768]) AS score,
+            fts_main_farming.match_bm25(pk, ?) AS fts_score,
+            *
+        FROM farming
+    ) 
+    WHERE (score > 0.5 OR fts_score > 2.0)
+    {category_filter}
+    AND content NOT LIKE '%····%'
+    AND content NOT LIKE '%목 차%'
+    AND category NOT IN ('목차')
+    ORDER BY final_score DESC 
+    LIMIT 5;
+    """
+    return _con.execute(sql, [query_vector, query]).fetchall()
+
 if query:
     category_filter = ""
     if selected_cats:
         cats_str = "', '".join(selected_cats)
         category_filter = f"AND category IN ('{cats_str}')"
 
-    with st.spinner(f"AI가 '{query}' 관련 문서를 분석 중입니다..."):
-        query_vector = model.encode(query).tolist()
-        
-        sql = f"""
-        SELECT score, category, year, month, content
-        FROM (
-            SELECT array_cosine_similarity(embedding, ?::FLOAT[768]) AS score, *
-            FROM farming
-        ) 
-        WHERE score IS NOT NULL
-        {category_filter}
-        AND content NOT LIKE '%····%'
-        AND content NOT LIKE '%목 차%'
-        AND category NOT IN ('목차')
-        ORDER BY score DESC 
-        LIMIT 5;
-        """
-        results = con.execute(sql, [query_vector]).fetchall()
+    with st.spinner(f"AI와 엔진이 '{query}' 관련 최적의 정보를 찾는 중..."):
+        results = search_farming(query, category_filter, model, con)
 
     if not results:
         st.warning("조건에 맞는 정보를 찾지 못했습니다.")
