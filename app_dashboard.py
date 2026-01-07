@@ -154,8 +154,9 @@ def render_weather_chart(content):
         header_line = table_lines[sep_idx - 1]
         headers = [h.strip() for h in header_line.split('|') if h.strip()]
         
-        # 기상관련 표인지 확인
-        if not any(k in "".join(headers) for k in ['기온', '강수', '온도', '습도']):
+        # 기상관련 표인지 확인 (공백 제거 후 비교)
+        headers_combined = "".join(headers).replace(" ", "")
+        if not any(k in headers_combined for k in ['기온', '강수', '온도', '습도']):
             return
             
         data = []
@@ -179,7 +180,8 @@ def render_weather_chart(content):
         # 수치형 변환
         val_cols = []
         for col in headers[1:]: # 첫 컬럼은 대개 '구분'
-            if any(k in col for k in ['기온', '강수', '온도', '습도']):
+            col_clean = col.replace(" ", "")
+            if any(k in col_clean for k in ['기온', '강수', '온도', '습도']):
                 df[f'{col}_val'] = df[col].apply(extract_num)
                 val_cols.append(col)
         
