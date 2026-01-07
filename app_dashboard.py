@@ -172,9 +172,9 @@ with st.sidebar:
 with st.container():
     st.markdown("### 🌤️ 지난 3년, 오늘 이맘때 핵심 정보")
     
-    # [SQL 수정] 과도한 필터('제1장' 등) 제거하여 2025년 기상 정보 확보
+    # [SQL 수정] id 추가하여 주간 범위 파악
     history_sql = f"""
-        SELECT year, category, content 
+        SELECT id, year, category, content 
         FROM farming 
         WHERE month = ? 
         -- 기본적인 노이즈만 제거 (목차 점선, 명시적 목차 단어)
@@ -182,35 +182,69 @@ with st.container():
         AND content NOT LIKE '%목 차%'
         AND category NOT IN ('목차')
         ORDER BY year DESC
-        LIMIT 150 -- 데이터를 충분히 가져옴
+        LIMIT 150 
     """
     history_data = con.execute(history_sql, [current_month]).fetchall()
     
     if history_data:
         history_by_year = {}
         
-        # [우선순위 정렬] 기상, 농업정보 -> 요약 -> 나머지
-        def get_priority(cat_name):
-            if '기상' in cat_name or '농업' in cat_name: return 0
-            if '요약' in cat_name: return 1
+        # [우선순위 로직] 날짜 매칭되는 요약 > 일반 요약 > 기상/농업 > 나머지
+        def get_priority(item, current_date):
+            _id, _year, _cat, _content = item
+            
+            # 1. 날짜 매칭 요약정보 (최우선)
+            if '요약' in _cat:
+                try:
+                    # ID 포맷: YYYY-MM-DD_YYYY-MM-DD
+                    dates = _id.split('_')
+                    if len(dates) == 2:
+                        start_dt = datetime.strptime(dates[0], "%Y-%m-%d")
+                        end_dt = datetime.strptime(dates[1], "%Y-%m-%d")
+                        
+                        # 데이터의 연도에 맞는 '이번 글'의 타겟 날짜 생성
+                        target_year = int(_year)
+                        # 현재 조회중인 날짜(current_date)의 월/일을 가져옴
+                        check_date = datetime(target_year, current_date.month, current_date.day)
+                        
+                        if start_dt <= check_date <= end_dt:
+                            return 0 # 날짜 딱 맞는 주간 요약
+                except Exception:
+                    pass
+                return 1 # 날짜 안 맞아도 요약이면 차순위
+                
+            if '기상' in _cat or '농업' in _cat: return 2
             return 99
 
-        for year, cat, content in history_data:
+        for row in history_data:
+            row_id, year, cat, content = row
+            
             if year not in history_by_year:
                 history_by_year[year] = []
             
-            # [Python 필터] 목차 테이블 정밀 제거 (파이프가 많고 숫자가 나열된 경우)
-            # 표 내용 중에 '페이지'나 '쪽' 같은 단어가 있으면 목차일 확률 높음
+            # [필터링 1] 목차 테이블 정밀 제거
             if content.count('|') > 3 and ('페이지' in content or '쪽' in content):
                 continue
 
-            if len(history_by_year[year]) >= 5: continue
+            # [필터링 2] 내용 없는 껍데기 제거 (제목만 있는 경우 등)
+            # 줄바꿈, 파이프 제거 후 순수 텍스트 길이 체크
+            clean_text = content.replace('\n', '').replace('|', '').replace('-', '').strip()
             
-            # 중복 제거
-            if any(item[1] == content for item in history_by_year[year]):
-                continue
+            # "### 제1장 벼" 같은 헤더만 있는 경우 대략 10~20자 내외
+            if len(clean_text) < 40: 
+                # 1. '###'로 시작하고
+                # 2. '제'와 '장'이 포함되어 있으면 목차 헤더일 확률 매우 높음 (예: ### 제1장 벼)
+                # 3. 혹은 '###' 만 있고 내용이 거의 없는 경우
+                if '###' in content:
+                     # 진짜 헤더인지 확인 (제x장 패턴)
+                     if ('제' in content and '장' in content) or len(clean_text) < 15:
+                         continue
 
-            history_by_year[year].append((cat, content))
+            # 중복 제거 (내용 기준)
+            if any(item[3] == content for item in history_by_year[year]):
+                continue
+                
+            history_by_year[year].append(row)
 
         # 연도별 출력
         available_years = sorted(history_by_year.keys(), reverse=True)
@@ -224,12 +258,16 @@ with st.container():
                 st.markdown(f"#### 📆 {year}년 {current_month}월")
                 
                 # 우선순위 정렬 적용
-                items = sorted(history_by_year[year], key=lambda x: get_priority(x[0]))
+                # 5개까지만 표출 (정렬 후)
+                items = sorted(history_by_year[year], key=lambda x: get_priority(x, today))
                 
-                for category, full_content in items:
+                # 상위 5개 중, 내용이 실한 것만 보여줌
+                final_items = items[:5]
+                
+                for _, _, category, full_content in final_items:
                     safe_content = format_content(full_content)
                     
-                    # 미리보기 텍스트 (줄바꿈 제거)
+                    # 미리보기 텍스트
                     clean_one_line = full_content.replace('\n', ' ').replace('|', ' ').strip()
                     preview_text = clean_one_line[:40] + "..." if len(clean_one_line) > 40 else clean_one_line
                     
@@ -239,7 +277,6 @@ with st.container():
                     else: icon = "📌"
 
                     with st.expander(f"{icon} **[{category}]** {preview_text}", expanded=False):
-                        # [핵심 수정] st.info 제거하고 st.markdown 사용 (표 깨짐 해결)
                         st.markdown(safe_content, unsafe_allow_html=True)
                 
                 st.markdown("---") 
