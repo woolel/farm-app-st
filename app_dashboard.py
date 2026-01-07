@@ -109,27 +109,36 @@ if con is None:
 def format_content(text):
     r"""
     1. 취소선 방지: ~ -> \~
-    2. 표 구조 개선: 본문과 표가 붙은 경우만 정밀 분리 (표 내부 파괴 방지)
+    2. 표 구조 개선: 라인 단위로 분석하여 표의 시작점만 안전하게 분리
     """
     if not text: return ""
     
     # 1. 취소선 방지
     text = text.replace('~', r'\~')
     
-    # 2. 긴 본문 텍스트 뒤에 표가 시작되는 경우만 줄바꿈 (10자 이상 텍스트 + 종결부호)
-    # 금년(A) | 와 같은 짧은 행 제목이 잘리는 것을 방지
-    text = re.sub(r'(?m)^([^|\n]{10,}[.:)])\s*(\|)', r'\1\n\2', text)
+    # 2. 라인 단위로 표 시작점 분리
+    lines = text.split('\n')
+    processed_lines = []
+    for line in lines:
+        stripped = line.strip()
+        # 라인이 파이프로 시작하지 않는데 중간에 파이프가 있으면 (텍스트 | 표)
+        # 첫 번째 파이프 앞에서 줄바꿈 수행
+        if '|' in stripped and not stripped.startswith('|'):
+            idx = line.find('|')
+            processed_lines.append(line[:idx])
+            processed_lines.append(line[idx:])
+        else:
+            processed_lines.append(line)
     
-    # 3. 표 구분선(|---|)이 앞뒤 행과 붙어있는 경우 강제 분리
-    # 3-1. 헤더|구분선 -> 헤더\n구분선
-    text = re.sub(r'(\|\s*)(\|\s*:?-+:?\s*\|)', r'\1\n\2', text)
-    # 3-2. 구분선|데이터 -> 구분선\n데이터
-    text = re.sub(r'(\|\s*:?-+:?\s*\|\s*)(\|)', r'\1\n\2', text)
+    combined_text = '\n'.join(processed_lines)
+    
+    # 3. 표 헤더와 구분선(|---|)이 붙어있는 경우만 추가 분리
+    combined_text = re.sub(r'(\|\s*)(\|\s*:?-+:?\s*\|)', r'\1\n\2', combined_text)
     
     # 4. 파이프 기호 주변 공백 정규화 (가독성)
-    text = text.replace('|', ' | ')
+    combined_text = combined_text.replace('|', ' | ')
     
-    return f"\n{text}\n"
+    return f"\n{combined_text}\n"
 
 # ==========================================
 # 4. 사이드바
