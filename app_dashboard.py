@@ -109,36 +109,23 @@ if con is None:
 def format_content(text):
     r"""
     1. 취소선 방지: ~ -> \~
-    2. 표 구조 개선: 라인 단위로 분석하여 표의 시작점만 안전하게 분리
+    2. 표 구조 개선: 초기의 안정적인 로직으로 복귀하며 문장 끝의 표만 분리
     """
     if not text: return ""
     
     # 1. 취소선 방지
     text = text.replace('~', r'\~')
     
-    # 2. 라인 단위로 표 시작점 분리
-    lines = text.split('\n')
-    processed_lines = []
-    for line in lines:
-        stripped = line.strip()
-        # 라인이 파이프로 시작하지 않는데 중간에 파이프가 있으면 (텍스트 | 표)
-        # 첫 번째 파이프 앞에서 줄바꿈 수행
-        if '|' in stripped and not stripped.startswith('|'):
-            idx = line.find('|')
-            processed_lines.append(line[:idx])
-            processed_lines.append(line[idx:])
-        else:
-            processed_lines.append(line)
+    # 2. 문장이 끝나고 표가 바로 붙어 나오는 경우만 안전하게 줄바꿈
+    # 이 패턴은 본문과 표가 겹칠 때만 동작하며 표 내부는 건드리지 않음
+    text = text.replace('.|', '.\n|').replace('. |', '.\n|')
+    text = text.replace(')|', ')\n|').replace(') |', ')\n|')
+    text = text.replace(':|', ':\n|').replace(': |', ':\n|')
     
-    combined_text = '\n'.join(processed_lines)
+    # 3. 파이프 기호 주변 공백 정규화 (가독성 및 렌더링 안정성)
+    text = text.replace('|', ' | ')
     
-    # 3. 표 헤더와 구분선(|---|)이 붙어있는 경우만 추가 분리
-    combined_text = re.sub(r'(\|\s*)(\|\s*:?-+:?\s*\|)', r'\1\n\2', combined_text)
-    
-    # 4. 파이프 기호 주변 공백 정규화 (가독성)
-    combined_text = combined_text.replace('|', ' | ')
-    
-    return f"\n{combined_text}\n"
+    return f"\n{text}\n"
 
 # ==========================================
 # 4. 사이드바
