@@ -53,6 +53,7 @@ def load_resources():
     con = duckdb.connect('farming_granular.duckdb', read_only=True)
     try:
         con.execute("INSTALL vss; LOAD vss;")
+        con.execute("INSTALL fts; LOAD fts;") # FTS 확장 로드 추가
     except Exception:
         pass 
         
