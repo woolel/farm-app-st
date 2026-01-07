@@ -48,9 +48,11 @@ def load_resources():
         model = SentenceTransformer(model_path)
     
     if not os.path.exists('farming_granular.duckdb'):
-        return None, None
+        return None, None, "file_not_found"
         
     con = duckdb.connect('farming_granular.duckdb', read_only=True)
+    fts_status = "ok"
+
     try:
         con.execute("INSTALL vss; LOAD vss;")
         con.execute("INSTALL fts; LOAD fts;")
@@ -61,17 +63,14 @@ def load_resources():
             schemas = con.execute("SELECT schema_name FROM duckdb_schemas;").fetchall()
             fts_exists = any('fts_main_farming' in str(row) for row in schemas)
             if not fts_exists:
-                st.error("⚠️ 데이터베이스에 FTS 인덱스가 감지되지 않습니다. (최신 DB가 적용되지 않았을 수 있습니다)")
-                if st.button("🔄 데이터베이스 연결 새로고침 (캐시 삭제)"):
-                    st.cache_resource.clear()
-                    st.rerun()
+                fts_status = "fts_missing"
         except Exception:
             pass # 진단 쿼리 자체가 실패할 경우 앱 실행을 방해하지 않음
             
     except Exception as e:
         st.warning(f"DuckDB 확장 로드 실패 (검색 기능이 제한될 수 있음): {e}")
         
-    return model, con
+    return model, con, fts_status
 
 # [극대화 3] 데이터 조회 유틸리티 (캐싱 적용)
 @st.cache_data(ttl=3600)
@@ -88,10 +87,20 @@ def get_monthly_trends(month, _con):
     """
     return _con.execute(sql, [month]).fetchall()
 
-model, con = load_resources()
+model, con, db_status = load_resources()
+
+if db_status == "file_not_found":
+    st.error("❌ 'farming_granular.duckdb' 파일이 없습니다.")
+    st.stop()
+
+if db_status == "fts_missing":
+    st.error("⚠️ 데이터베이스에 FTS 인덱스가 감지되지 않습니다. (최신 DB가 적용되지 않았을 수 있습니다)")
+    if st.button("🔄 데이터베이스 연결 새로고침 (캐시 삭제)"):
+        st.cache_resource.clear()
+        st.rerun()
 
 if con is None:
-    st.error("❌ 'farming_granular.duckdb' 파일이 없습니다.")
+    st.error("❌ 데이터베이스 연결에 실패했습니다.")
     st.stop()
 
 # ==========================================
