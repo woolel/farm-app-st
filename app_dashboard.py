@@ -189,77 +189,71 @@ with st.container():
     if history_data:
         history_by_year = {}
         
-        # [우선순위 로직] 날짜 매칭되는 요약 > 기상/농업 > 나머지
-        # '이번주'의 기준을 조금 넓게(+- 7일) 잡아서 가장 가까운 요약표를 찾음
-        def get_priority(item, current_date):
+        # [날짜 매칭 로직]
+        # 모든 항목에 대해 '오늘 날짜'와 해당 데이터의 기간(ID)이 일치하는지 확인
+        def get_date_score(item, current_date):
             _id, _year, _cat, _content = item
-            
-            # 1. 날짜 매칭 요약정보 (최우선)
-            if '요약' in _cat:
-                try:
-                    # ID 포맷: YYYY-MM-DD_YYYY-MM-DD
-                    dates = _id.split('_')
-                    if len(dates) == 2:
-                        start_dt = datetime.strptime(dates[0], "%Y-%m-%d")
-                        end_dt = datetime.strptime(dates[1], "%Y-%m-%d")
-                        
-                        target_year = int(_year)
-                        check_date = datetime(target_year, current_date.month, current_date.day)
-                        
-                        # [유연한 매칭] 해당 주간이거나, 주간 시작/끝에서 7일 이내면 허용
-                        # 이렇게 하면 1월 7일인데 1월 8일 시작 데이터도 매칭됨
-                        diff_start = abs((check_date - start_dt).days)
-                        diff_end = abs((check_date - end_dt).days)
-                        
-                        if start_dt <= check_date <= end_dt:
-                            return 0 # 정확히 포함
-                        elif diff_start <= 7 or diff_end <= 7:
-                            return 0 # 근처 1주일 이내면 허용
-                except Exception:
-                    pass
-                return 100 # 날짜 안 맞는 요약은 아예 뒤로 보내거나 숨김
-                
-            if '기상' in _cat or '농업' in _cat: return 2
-            return 99
+            try:
+                dates = _id.split('_')
+                if len(dates) == 2:
+                    start_dt = datetime.strptime(dates[0], "%Y-%m-%d")
+                    end_dt = datetime.strptime(dates[1], "%Y-%m-%d")
+                    
+                    target_year = int(_year)
+                    check_date = datetime(target_year, current_date.month, current_date.day)
+                    
+                    # 1. 정확히 포함 (0점)
+                    if start_dt <= check_date <= end_dt:
+                        return 0, 0
+                    
+                    # 2. 가까운 거리 (일수 차이)
+                    diff_start = abs((check_date - start_dt).days)
+                    diff_end = abs((check_date - end_dt).days)
+                    min_diff = min(diff_start, diff_end)
+                    
+                    # 3. 7일 이내면 허용하되, 점수는 거리만큼 부여 (낮을수록 좋음)
+                    if min_diff <= 7:
+                        return 1, min_diff
+            except:
+                pass
+            return 99, 99 # 매칭 실패
 
         for row in history_data:
-            row_id, year, cat, content = row
+            _, year, cat, content = row
             
             if year not in history_by_year:
                 history_by_year[year] = []
             
-            # [필터링 1] 목차/차례 명시적 제거 (강력 필터)
-            if '목 차' in content or '목차' in content:
+            # [필터링 1] 목차/차례 제거 (공백 제거 후 확인)
+            content_nospace = content.replace(' ', '').replace('\t', '')
+            if '목차' in content_nospace or '차례' in content_nospace:
                 continue
 
-            # [필터링 2] 내용 없는 껍데기 제거
-            clean_text = content.replace('\n', '').replace('|', '').replace('-', '').strip()
+            # [필터링 2] 내용 없는 껍데기 & 헤더 제거
+            clean_text = content_nospace.replace('\n', '').replace('|', '').replace('-', '').strip()
             
-            # "### 제 7장 제7장 특용작물" 같은 반복 헤더 제거
-            # 헤더(###)만 있고 내용 길이가 짧거나, 의미있는 문장이 없는 경우
-            is_header_only = False
+            # 헤더 필터
             if '###' in content:
-                 # 제x장 패턴이 있고 길이가 50자 미만이면 제낌
-                 if ('제' in content and '장' in content) and len(clean_text) < 60:
-                     is_header_only = True
-                 # '기상' 같은 단일 헤더도 짧으면 제낌
-                 elif len(clean_text) < 30:
-                     is_header_only = True
+                 # 제x장 패턴 + 짧음 -> 제거
+                 if ('제' in content_nospace and '장' in content_nospace) and len(clean_text) < 60:
+                     continue
+                 # 그냥 너무 짧음 -> 제거
+                 if len(clean_text) < 30:
+                     continue
             
-            if is_header_only: continue
-
-            # 중복 제거 (내용 기준)
+            # 내용 중복 제거
             if any(item[2] == content for item in history_by_year[year]):
                 continue
-                
-            priority = get_priority(row, today)
+
+            score, distance = get_date_score(row, today)
             
-            # [특수 필터] 날짜 안 맞는 요약은 브리핑에서 아예 제외 (혼란 방지)
-            if '요약' in cat and priority > 0:
-                continue
-            
-            # 우선순위와 함께 저장 (Priority, Category, Content)
-            history_by_year[year].append((priority, cat, content))
+            # [핵심 필터] 
+            # 날짜가 매칭되지 않은(99점) 데이터는 과감히 숨김
+            # -> "오늘 이맘때" 정보만 보여주기 위함
+            if score >= 99:
+                 continue
+
+            history_by_year[year].append({'score': score, 'dist': distance, 'cat': cat, 'content': content})
 
         # 연도별 출력
         available_years = sorted(history_by_year.keys(), reverse=True)
@@ -270,25 +264,50 @@ with st.container():
             for i, year in enumerate(available_years):
                 if i >= 3: break 
                 
-                # 우선순위 정렬 (Prio 0 -> ... -> 99)
-                items = sorted(history_by_year[year], key=lambda x: x[0])
-                
-                # 데이터가 없으면 스킵
+                items = history_by_year[year]
                 if not items: continue
 
+                # [중복 제거 - Best Pick]
+                # 요약, 기상 등은 주간 단위로 하나만 나오므로, 점수가 가장 좋은 1개만 남김
+                unique_categories = {} # cat -> item
+                final_list = []
+                
+                # 점수(score) -> 거리(dist) 순 정렬
+                items.sort(key=lambda x: (x['score'], x['dist']))
+                
+                for item in items:
+                    c = item['cat']
+                    # 요약, 기상은 연도별 1개만 (가장 날짜 잘 맞는 것)
+                    if '요약' in c or '기상' in c or '농업' in c:
+                        if c not in unique_categories:
+                            unique_categories[c] = item
+                            final_list.append(item)
+                    else:
+                        # 작목 정보는 여러 개일 수 있으나, 같은 작목 내에서는 가장 잘 맞는 것 1개만?
+                        # 일단 작목은 다 보여주되 상위 N개 제한에 맡김
+                        final_list.append(item)
+                
+                # 최종 정렬: 요약 -> 기상 -> 나머지
+                def sort_key(x):
+                    if '요약' in x['cat']: return 0
+                    if '기상' in x['cat'] or '농업' in x['cat']: return 1
+                    return 2
+                
+                final_list.sort(key=sort_key)
+                
+                # 상위 5개
+                final_items = final_list[:5]
+                
                 st.markdown(f"#### 📆 {year}년 {current_month}월")
-                
-                # 상위 5개 표출
-                final_items = items[:5]
-                
-                for _, category, full_content in final_items:
+
+                for item in final_items:
+                    category = item['cat']
+                    full_content = item['content']
                     safe_content = format_content(full_content)
                     
-                    # 미리보기 텍스트
                     clean_one_line = full_content.replace('\n', ' ').replace('|', ' ').strip()
                     preview_text = clean_one_line[:40] + "..." if len(clean_one_line) > 40 else clean_one_line
                     
-                    # 아이콘 설정
                     if '기상' in category or '농업' in category: icon = "☁️"
                     elif '요약' in category: icon = "📝"
                     else: icon = "📌"
