@@ -4,7 +4,6 @@ from sentence_transformers import SentenceTransformer
 from datetime import datetime
 import os
 import re
-import pandas as pd
 
 # ==========================================
 # 1. 페이지 설정 및 디자인
@@ -110,106 +109,30 @@ if con is None:
 def format_content(text):
     r"""
     1. 취소선 방지: ~ -> \~
-    2. 표 깨짐 방지: 표 앞뒤/행간 줄바꿈 보강 (안전한 방식)
+    2. 표 구조 개선: 붙어버린 표 행 및 텍스트 분리
     """
     if not text: return ""
     
     # 1. 취소선 방지
     text = text.replace('~', r'\~')
     
-    # 2. 텍스트와 표가 붙어있는 경우 (안전한 패턴만 적용)
-    # 문장 끝(.)이나 괄호 끝()) 뒤에 파이프가 오면 줄바꿈
-    text = text.replace('.|', '.\n|').replace('. |', '.\n|')
-    text = text.replace(')|', ')\n|').replace(') |', ')\n|')
+    # 2. 텍스트와 표가 붙어있는 경우 강제 분리
+    # 글자(단어, 숫자, 문장부호) 바로 뒤에 |가 오면 줄바꿈 삽입
+    # 예: 하겠음.|구분| -> 하겠음.\n|구분|
+    text = re.sub(r'([^|\n])\s*(\|)', r'\1\n\2', text)
     
-    # 3. 표의 헤더와 구분선이 붙어있는 경우 강제 줄바꿈
-    # 예: |제목||---| -> |제목|\n|---|
-    # 구분선 패턴: |-...| 또는 |:...|
+    # 3. 행과 행이 붙어있는 경우 분리 (| | 패턴)
+    # 한 행의 끝 |와 다음 행의 시작 |가 한 줄에 있을 경우
+    # 주로 | 내용 | | 다음내용 | 형태를 탐지
+    text = re.sub(r'(\|\s*)\|\s*([^|\n]+\|)', r'\1\n|\2', text)
+    
+    # 4. 표 헤더 구분선(|---|)이 붙어있는 경우 정규화
     text = re.sub(r'\|\s*(\|\s*:?-+:?\s*\|)', r'|\n\1', text)
     
-    # 4. 일반적인 행 분리 (파이프 간격 확보)
-    text = text.replace('|', ' | ') 
+    # 5. 파이프 기호 주변 공백 정규화 (표 렌더링 가독성)
+    text = text.replace('|', ' | ')
     
     return f"\n{text}\n"
-
-def render_weather_chart(content):
-    """
-    마크다운 표 데이터를 추출하여 그래프로 시각화
-    """
-    try:
-        lines = content.split('\n')
-        table_lines = [l.strip() for l in lines if '|' in l]
-        if len(table_lines) < 3: return # 헤더, 구분선, 최소 1행 필요
-        
-        # 구분선 인덱스 찾기
-        sep_idx = -1
-        for i, line in enumerate(table_lines):
-            if '---' in line:
-                sep_idx = i
-                break
-        
-        if sep_idx <= 0: return
-        
-        # 헤더와 데이터 분리
-        header_line = table_lines[sep_idx - 1]
-        headers = [h.strip() for h in header_line.split('|') if h.strip()]
-        
-        # 기상관련 표인지 확인 (공백 제거 후 비교)
-        headers_combined = "".join(headers).replace(" ", "")
-        if not any(k in headers_combined for k in ['기온', '강수', '온도', '습도']):
-            return
-            
-        data = []
-        for line in table_lines[sep_idx + 1:]:
-            cols = [c.strip() for c in line.split('|') if c.strip()]
-            if len(cols) >= 2:
-                data.append(cols[:len(headers)])
-        
-        if not data: return
-        
-        df = pd.DataFrame(data, columns=headers[:len(data[0])])
-        
-        # 수치 추출 함수 (범위인 경우 평균값)
-        def extract_num(text):
-            # 괄호 안의 데이터(비율 등)는 우선 제거
-            pure_text = re.sub(r'\(.*?\)', '', text)
-            nums = re.findall(r"[-+]?\d*\.\d+|\d+", pure_text)
-            if not nums: return None
-            return sum(float(n) for n in nums) / len(nums)
-
-        # 수치형 변환
-        val_cols = []
-        for col in headers[1:]: # 첫 컬럼은 대개 '구분'
-            col_clean = col.replace(" ", "")
-            if any(k in col_clean for k in ['기온', '강수', '온도', '습도']):
-                df[f'{col}_val'] = df[col].apply(extract_num)
-                val_cols.append(col)
-        
-        # 유효 데이터 확인
-        df_plot = df.dropna(subset=[f'{c}_val' for c in val_cols])
-        if df_plot.empty: return
-
-        # 그래프 그리기
-        st.markdown("---")
-        st.caption("📊 **표 데이터를 기반으로 자동 생성된 그래프**")
-        
-        x_col = headers[0]
-        
-        # 탭을 사용하여 기온과 강수량 분리 시각화
-        tab_names = [f"📈 {c}" for c in val_cols]
-        tabs = st.tabs(tab_names)
-        
-        for i, col in enumerate(val_cols):
-            with tabs[i]:
-                if '기온' in col or '온도' in col:
-                    st.area_chart(df_plot.set_index(x_col)[f'{col}_val'], color="#ff4b4b")
-                else:
-                    st.bar_chart(df_plot.set_index(x_col)[f'{col}_val'], color="#0068c9")
-        st.markdown("---")
-        
-    except Exception as e:
-        # 에러 발생 시 그래프만 생략하고 본문은 보여줌
-        pass
 
 # ==========================================
 # 4. 사이드바
@@ -404,9 +327,6 @@ with st.container():
                     else: icon = "📌"
 
                     with st.expander(f"{icon} **[{category}]** {preview_text}", expanded=False):
-                        # 기상 정보인 경우 그래프 시각화 시도
-                        if '기상' in category:
-                            render_weather_chart(full_content)
                         st.markdown(safe_content, unsafe_allow_html=True)
                 
                 st.markdown("---") 
@@ -478,10 +398,6 @@ if query:
                 # 검색어 하이라이팅 (마크다운 충돌 방지 위해 단순화)
                 st.markdown(f"💡 **관련 검색어:** {query}")
                 
-                # 기상 정보인 경우 그래프 시각화 시도
-                if '기상' in cat:
-                    render_weather_chart(content)
-                    
                 # [핵심 수정] st.info 대신 st.markdown 사용
                 st.markdown(safe_content, unsafe_allow_html=True)
                 st.caption("---")
