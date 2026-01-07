@@ -61,7 +61,10 @@ def load_resources():
             schemas = con.execute("SELECT schema_name FROM duckdb_schemas;").fetchall()
             fts_exists = any('fts_main_farming' in str(row) for row in schemas)
             if not fts_exists:
-                st.error("⚠️ 데이터베이스에 FTS 인덱스가 없습니다. 'embed.py'를 통해 생성된 최신 DB 파일을 업로드해주세요.")
+                st.error("⚠️ 데이터베이스에 FTS 인덱스가 감지되지 않습니다. (최신 DB가 적용되지 않았을 수 있습니다)")
+                if st.button("🔄 데이터베이스 연결 새로고침 (캐시 삭제)"):
+                    st.cache_resource.clear()
+                    st.rerun()
         except Exception:
             pass # 진단 쿼리 자체가 실패할 경우 앱 실행을 방해하지 않음
             
