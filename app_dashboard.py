@@ -55,11 +55,16 @@ def load_resources():
         con.execute("INSTALL vss; LOAD vss;")
         con.execute("INSTALL fts; LOAD fts;")
         
-        # FTS 인덱스 존재 여부 확인 (진단용)
-        idx_check = con.execute("PRAGMA show_indexes;").fetchall()
-        fts_exists = any('fts_main_farming' in str(row) for row in idx_check)
-        if not fts_exists:
-            st.error("⚠️ 데이터베이스에 FTS 인덱스가 없습니다. 'embed.py'를 통해 생성된 최신 DB 파일을 업로드해주세요.")
+        # FTS 인덱스 존재 여부 확인 (진단용 - 독립된 try-except로 감쌈)
+        try:
+            # PRAGMA show_indexes 대신 더 호환성 높은 duckdb_indexes 뷰 사용
+            idx_check = con.execute("SELECT * FROM duckdb_indexes;").fetchall()
+            fts_exists = any('fts_main_farming' in str(row) for row in idx_check)
+            if not fts_exists:
+                st.error("⚠️ 데이터베이스에 FTS 인덱스가 없습니다. 'embed.py'를 통해 생성된 최신 DB 파일을 업로드해주세요.")
+        except Exception:
+            pass # 진단 쿼리 자체가 실패할 경우 앱 실행을 방해하지 않음
+            
     except Exception as e:
         st.warning(f"DuckDB 확장 로드 실패 (검색 기능이 제한될 수 있음): {e}")
         
