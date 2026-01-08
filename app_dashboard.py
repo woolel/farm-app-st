@@ -230,20 +230,35 @@ def format_content(text):
                 
                 # 이어지는 테이블 행 수집 (빈 줄 무시하고 합침)
                 i += 1
+                crossed_blank = False # 빈 줄을 건너뛰었는지 여부 체크
+                
                 while i < len(lines):
                     next_content_line = lines[i].strip()
                     
-                    # 파이프가 있는 행은 테이블 데이터로 간주
-                    if '|' in next_content_line:
-                        table_lines.append(next_content_line)
-                        i += 1
-                    # 빈 줄은 건너뜀 (테이블 연속성 유지)
-                    elif not next_content_line:
+                    if not next_content_line:
+                        # 빈 줄 발견 -> 플래그 세우고 계속 진행
+                        crossed_blank = True
                         i += 1
                         continue
-                    # 파이프가 없는 텍스트가 나오면 테이블 종료
+                    
+                    # 내용이 있는 줄
+                    is_table_row = False
+                    
+                    # 1. 빈 줄을 건너뛴 후라면 -> 반드시 '|'로 시작해야 테이블로 인정 (엄격)
+                    if crossed_blank:
+                        if next_content_line.startswith('|'):
+                            is_table_row = True
+                    # 2. 연속된 줄이라면 -> '|'가 포함되기만 해도 인정 (관대)
                     else:
-                        # i를 증가시키지 않고 루프 탈출 (바깥 루프에서 처리하도록)
+                        if '|' in next_content_line:
+                            is_table_row = True
+                            
+                    if is_table_row:
+                        table_lines.append(next_content_line)
+                        crossed_blank = False # 유효 행 찾았으므로 플래그 초기화
+                        i += 1
+                    else:
+                        # 테이블 아님 -> 종료
                         break
                 
                 # 수집된 테이블 전체 출력
