@@ -183,55 +183,70 @@ def format_content(text):
     if not text: return ""
     # 물결표 이스케이프 (Streamlit 특수 기호)
     text = text.replace('~', r'\~') 
-    lines = text.split('\n')
-    formatted_lines = []
+    lines = text.splitlines()
+    output = []
     
-    in_table = False
-    for i, line in enumerate(lines):
+    i = 0
+    while i < len(lines):
+        line = lines[i]
         clean_line = line.strip()
-        # 파이프가 포함된 행 감지 (내용이 있는 경우만)
-        has_pipe = '|' in clean_line and len(clean_line.replace('|', '').strip()) > 0
         
-        if has_pipe:
-            # 1. 파이프 기호 주변 공백 정규화 및 정리
-            processed_line = re.sub(r'\s*\|\s*', ' | ', clean_line).strip()
-            # 2. 시작과 끝에 파이프 강제 추가 (마크다운 엔진 안정성)
-            if not processed_line.startswith('|'): processed_line = '| ' + processed_line
-            if not processed_line.endswith('|'): processed_line = processed_line + ' |'
+        # 테이블 블록 감지 (파이프가 있고 실질적인 텍스트 내용이 있는 행)
+        # 단순히 '-' 나 '.' 만 있는 구분선 행은 제외
+        has_real_content = any(c.isalnum() for c in clean_line)
+        if '|' in clean_line and has_real_content:
+            table_rows_data = []
+            max_cols = 0
             
-            if not in_table:
-                # 테이블 시작 감지
-                # 본문과 테이블 사이 공백 확보 (선택사항이나 마크다운 표준에 좋음)
-                if i > 0 and formatted_lines and formatted_lines[-1] != "":
-                    # 다만 직전 줄이 이미 공백이면 추가하지 않음
-                    pass 
+            # 연속된 테이블 행 수집
+            while i < len(lines):
+                curr_line = lines[i].strip()
+                if '|' not in curr_line:
+                    break
                 
-                formatted_lines.append(processed_line)
+                # 가공: 도트 리더 제거 및 중복 파이프 정리
+                processed = curr_line.replace('···', '').replace('...', '')
+                processed = re.sub(r'\|+', '|', processed) # ||| -> |
                 
-                # 3. 필수 구분행(|---|) 삽입 여부 확인
-                # 이미 구분행이 존재하는지 다음 줄 확인
-                next_is_separator = False
-                if i + 1 < len(lines):
-                    next_clean = lines[i+1].strip()
-                    if next_clean.startswith('|') and '-' in next_clean:
-                        next_is_separator = True
+                # 셀 분해 및 유효성 확인
+                cells = [c.strip() for c in processed.strip('|').split('|')]
+                # 후행 빈 셀 제거
+                while cells and not cells[-1]: cells.pop()
                 
-                if not next_is_separator:
-                    # 열 개수 계산하여 구분행 생성
-                    num_cols = processed_line.count('|') - 1
-                    if num_cols > 0:
-                        separator = "|" + "---|" * num_cols
-                        formatted_lines.append(separator)
+                # 실질적인 글자가 있는 행만 수집
+                if cells and any(any(c.isalnum() for c in cell) for cell in cells):
+                    table_rows_data.append(cells)
+                    max_cols = max(max_cols, len(cells))
                 
-                in_table = True
+                i += 1
+            
+            if table_rows_data:
+                # 열 개수 품질 관리: 너무 많으면(TOC 망가진 경우) 최대 5열로 제한
+                if max_cols > 5: max_cols = 5
+                
+                final_table = []
+                for idx, row_cells in enumerate(table_rows_data):
+                    # 열 제한에 맞춰 데이터 절삭 및 병합
+                    if len(row_cells) > max_cols:
+                        row_cells = row_cells[:max_cols-1] + [" ".join(row_cells[max_cols-1:])]
+                    
+                    padded_row = row_cells + [""] * (max_cols - len(row_cells))
+                    md_row = "| " + " | ".join(padded_row) + " |"
+                    final_table.append(md_row)
+                    
+                    if idx == 0:
+                        separator = "|" + " --- |" * max_cols
+                        final_table.append(separator)
+                
+                output.extend(final_table)
             else:
-                formatted_lines.append(processed_line)
+                # 유효 내용이 없던 경우 i는 이미 위에서 증가했으므로 별도 처리 불필요하거나 i += 1
+                pass
         else:
-            if in_table:
-                in_table = False
-            formatted_lines.append(line)
+            output.append(line)
+            i += 1
             
-    return '\n'.join(formatted_lines)
+    return '\n'.join(output)
 
 # ==========================================
 # 4. 앱 상태 관리 및 상수
