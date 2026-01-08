@@ -122,11 +122,19 @@ if isinstance(status, str) and "error" in status:
     st.stop()
 
 if status == "file_not_found":
-    st.error(f"{material_icon('error', color='#ea4335')} 'farming_granular.duckdb' 데이터베이스 파일이 없습니다.", unsafe_allow_html=True)
+    st.markdown(f"""
+        <div style="padding:15px; border-radius:5px; background-color:#f8d7da; color:#721c24; border:1px solid #f5c6cb;">
+            {material_icon('error', color='#ea4335')} 'farming_granular.duckdb' 데이터베이스 파일이 없습니다.
+        </div>
+    """, unsafe_allow_html=True)
     st.stop()
 
 if status == "fts_missing":
-    st.warning(f"{material_icon('warning', color='#fbbc04')} 검색 인덱스(FTS)가 감지되지 않아 키워드 검색 성능이 저하될 수 있습니다.", unsafe_allow_html=True)
+    st.markdown(f"""
+        <div style="padding:15px; border-radius:5px; background-color:#fff3cd; color:#856404; border:1px solid #ffeeba; margin-bottom:20px;">
+            {material_icon('warning', color='#fbbc04')} 검색 인덱스(FTS)가 감지되지 않아 키워드 검색 성능이 저하될 수 있습니다.
+        </div>
+    """, unsafe_allow_html=True)
 
 # ==========================================
 # 3. 유틸리티 함수
@@ -272,9 +280,11 @@ with st.expander(f"지난 3년간 오늘 이맘때의 주요 정보 보기", exp
                 cols = st.columns(2)
                 for idx, item in enumerate(grouped[y][:4]): 
                     cat, content = item[2], item[3]
+                    # 'content' 카테고리는 표시하지 않음
+                    cat_prefix = f"[{cat}] " if cat and cat != 'content' else ""
                     short_content = content.split('\n')[0][:30] + "..."
                     with cols[idx % 2]:
-                        with st.popover(f"[{cat}] {short_content}"):
+                        with st.popover(f"{cat_prefix}{short_content}"):
                             st.markdown(format_content(content), unsafe_allow_html=True)
         else:
             st.info("이맘때와 정확히 일치하는 과거 주간 정보가 없습니다.")
@@ -335,7 +345,11 @@ if search_btn and query_input:
             results = con.execute(search_sql, [query_vector, query_input]).fetchall()
             
             if not results:
-                st.warning(f"{material_icon('sentiment_dissatisfied', color='#fbbc04')} 검색 결과가 없습니다. 질문을 구체적으로 바꾸거나 필터를 해제해보세요.", unsafe_allow_html=True)
+                st.markdown(f"""
+                    <div style="padding:15px; border-radius:5px; background-color:#fff3cd; color:#856404; border:1px solid #ffeeba;">
+                        {material_icon('sentiment_dissatisfied', color='#fbbc04')} 검색 결과가 없습니다. 질문을 구체적으로 바꾸거나 필터를 해제해보세요.
+                    </div>
+                """, unsafe_allow_html=True)
             else:
                 st.success(f"총 {len(results)}건의 관련 정보를 찾았습니다.")
                 
@@ -350,10 +364,13 @@ if search_btn and query_input:
                     badge_color = "#34a853" if v_score > 0.65 else "#fbbc04"
                     match_type = "AI+키워드" if f_score > 0 else "AI추론"
                     
+                    # 'content' 카테고리는 표시하지 않음
+                    cat_display = f"<b>[{cat}]</b> " if cat and cat != 'content' else ""
+
                     with st.container(border=True):
                         st.markdown(f"""
                         <div style='display:flex; justify-content:space-between; align-items:center;'>
-                            <span class='big-font'><b>[{cat}]</b> {yr}년 {mn}월 자료</span>
+                            <span class='big-font'>{cat_display}{yr}년 {mn}월 자료</span>
                             <span style='color:{badge_color}; font-weight:bold; font-size:0.9em;'>
                                 유사도 {v_score:.2f} ({match_type})
                             </span>
