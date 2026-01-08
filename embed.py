@@ -3,6 +3,7 @@ import os
 import json
 import pandas as pd
 from sentence_transformers import SentenceTransformer
+from kiwipiepy import Kiwi
 
 # ==========================================
 # 1. 설정 (파일 경로 및 모델)
@@ -13,9 +14,23 @@ MODEL_NAME = 'jhgan/ko-sroberta-multitask'      # 한국어 특화 임베딩 모
 VECTOR_DIM = 768                                # 모델의 벡터 차원 수
 
 # ==========================================
+# 1.5. Kiwi 형태소 분석기 및 전처리 함수
+# ==========================================
+kiwi = Kiwi()
+
+def extract_keywords(text):
+    """명사(N), 동사/형용사(V), 수칭/수치(SN)만 추출하여 텍스트 정규화"""
+    if not text: return ""
+    result = kiwi.tokenize(text)
+    # N(명사), V(동사/형용사 어근), SN(숫자/수량) 추출
+    keywords = [t.form for t in result if t.tag.startswith('N') or t.tag.startswith('V') or t.tag == 'SN']
+    return " ".join(keywords) if keywords else text
+
+# ==========================================
 # 2. AI 모델 로드
 # ==========================================
 print(f"🚀 [1/5] AI 모델 로드 중 ({MODEL_NAME})...")
+print("   (처음 실행 시 모델 다운로드에 시간이 소요될 수 있습니다. 잠시만 기다려주세요.)")
 model = SentenceTransformer(MODEL_NAME)
 
 # ==========================================
@@ -73,10 +88,8 @@ try:
             month = entry.get('month')
             
             # 데이터 구조 파악 (평탄화 여부에 따라 처리)
-            # 1) {"content": {"양봉": "..."}} 형태인 경우
             if 'content' in entry and isinstance(entry['content'], dict):
                 target_dict = entry['content']
-            # 2) {"양봉": "...", "기상": "..."} 형태인 경우 (이미 평탄화됨)
             else:
                 target_dict = entry
 
@@ -90,14 +103,7 @@ try:
                 if not val or not isinstance(val, str) or len(val.strip()) < 5:
                     continue
 
-                # 원본 텍스트 공백만 정리 (%, ~, ℃ 등 특수기호 완벽 보존)
                 clean_content = val.strip()
-                
-                # 임베딩 품질을 위해 "카테고리: 내용" 형태로 조합
-                # 예: "양봉: 겨울철 온도는 -2~5℃ 유지..."
-                embedding_text = f"{key}: {clean_content}"
-                
-                # 리스트에 추가
                 processed_rows.append({
                     "id": week_id,
                     "year": year,
@@ -105,13 +111,37 @@ try:
                     "category": key,
                     "content": clean_content
                 })
-                texts_to_embed.append(embedding_text)
 
 except FileNotFoundError:
     print(f"❌ 오류: 입력 파일({INPUT_FILE})을 찾을 수 없습니다.")
     exit()
 
-print(f"   -> 총 {len(processed_rows)}개의 세부 데이터로 분리 완료.")
+print(f"   -> 총 {len(processed_rows)}개의 세부 데이터 분석 완료.")
+
+# ==========================================
+# 4.5. 키워드 추출 (안정적인 tokenize 방식)
+# ==========================================
+if processed_rows:
+    print(f"🚀 [3.5/5] Kiwi 형태소 분석기 가동 중 (키워드 추출)...")
+    
+    keyword_texts = []
+    total = len(processed_rows)
+    
+    for i, row in enumerate(processed_rows):
+        # N(명사), V(동사/형용사 어근), SN(숫자/수량) 추출
+        result = kiwi.tokenize(row['content'])
+        keywords = [t.form for t in result if t.tag.startswith('N') or t.tag.startswith('V') or t.tag == 'SN']
+        keyword_texts.append(" ".join(keywords) if keywords else row['content'])
+        
+        # 500개 단위로 진행 상황 표시
+        if (i + 1) % 500 == 0 or (i + 1) == total:
+            print(f"   -> 키워드 추출 진행 중: {i + 1}/{total} ({(i + 1)/total*100:.1f}%)")
+
+    # 임베딩용 텍스트 최종 생성
+    for i, row in enumerate(processed_rows):
+        cat = row['category']
+        embedding_text = f"{cat}: {keyword_texts[i]}"
+        texts_to_embed.append(embedding_text)
 
 # ==========================================
 # 5. 임베딩 생성 및 DB 저장 (Pandas 고속 모드)

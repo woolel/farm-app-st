@@ -4,6 +4,7 @@ from sentence_transformers import SentenceTransformer
 from datetime import datetime
 import os
 import re
+from kiwipiepy import Kiwi
 
 # ==========================================
 # 1. 페이지 설정 및 디자인
@@ -130,6 +131,18 @@ if status == "fts_missing":
 # ==========================================
 # 3. 유틸리티 함수
 # ==========================================
+@st.cache_resource
+def get_kiwi():
+    """Kiwi 객체 캐싱 (성능 최적화)"""
+    return Kiwi()
+
+def extract_keywords(text):
+    """명사, 동사 어근, 숫자만 추출하여 AI 검색 품질 향상"""
+    if not text: return ""
+    kiwi = get_kiwi()
+    result = kiwi.tokenize(text)
+    keywords = [t.form for t in result if t.tag.startswith('N') or t.tag.startswith('V') or t.tag == 'SN']
+    return " ".join(keywords) if keywords else text
 def material_icon(name, size=20, color=None, font_weight=400):
     """Material Symbols 아이콘을 반환하는 헬퍼 함수"""
     style = f"font-size:{size}px; font-weight:{font_weight};"
@@ -295,9 +308,11 @@ if search_btn and query_input:
         cat_filter_sql = f"AND category IN ('{cat_list_str}')"
 
     with st.spinner("AI가 문서를 분석 중입니다..."):
-        query_vector = model.encode(query_input).tolist()
+        # 검색어 정규화 (명사/동사/숫자 추출)
+        clean_query = extract_keywords(query_input)
+        query_vector = model.encode(clean_query).tolist()
         
-        # Nested Query 구조 (Binder Error 방지)
+        # 하이브리드 검색 SQL (Semantic 1.5배 + FTS 0.5배 가중치 결합)
         search_sql = f"""
         SELECT 
             vector_score,
@@ -311,8 +326,8 @@ if search_btn and query_input:
             FROM farming
             WHERE 1=1 {cat_filter_sql}
         ) sub
-        WHERE vector_score > 0.45 -- 최소 관련성 필터
-        ORDER BY (vector_score * 10 + ln(coalesce(fts_score, 0) + 1)) DESC
+        WHERE vector_score > 0.40 -- 최소 관련성 필터 완화 (전처리 후엔 점수 편차가 커질 수 있음)
+        ORDER BY (vector_score * 1.5 + fts_score * 0.5) DESC -- 가중치 기반 하이브리드 정렬
         LIMIT 5
         """
         
