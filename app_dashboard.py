@@ -13,7 +13,7 @@ st.set_page_config(
     page_title="스마트 농업 대시보드", 
     page_icon="🚜", 
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed" # 햄버거 메뉴를 위해 기본 접힘
 )
 
 # CSS 스타일 커스텀
@@ -115,6 +115,15 @@ def get_monthly_trends(month, _con):
     except:
         return []
 
+@st.cache_data(ttl=3600)
+def get_week_list(year, month, _con):
+    """특정 연도/월의 주간 정보(id) 목록 조회"""
+    try:
+        sql = "SELECT DISTINCT id FROM farming WHERE year = ? AND month = ? ORDER BY id"
+        return [row[0] for row in _con.execute(sql, [int(year), int(month)]).fetchall()]
+    except:
+        return []
+
 model, con, status = load_resources()
 
 if isinstance(status, str) and "error" in status:
@@ -177,61 +186,43 @@ def format_content(text):
     return '\n'.join(formatted_lines)
 
 # ==========================================
-# 4. 사이드바 UI
+# 4. 앱 상태 관리 및 상수
 # ==========================================
 today = datetime.now()
 current_month = today.month
 
-with st.sidebar:
-    st.markdown(f"## {material_icon('agriculture', size=32, color='#34a853')} 스마트 농업 봇", unsafe_allow_html=True)
-    st.info(f"오늘 날짜: {today.year}년 {today.month}월 {today.day}일")
-    
-    st.markdown(f"### {material_icon('sell', color='#1a73e8')} 관심 분야 설정", unsafe_allow_html=True)
-    selected_cats = st.multiselect(
-        "필터링할 작목/분야:",
-        ['기상', '벼', '밭작물', '채소', '과수', '특용작물', '축산', '양봉'],
-        default=['기상', '과수']
-    )
-    
-    st.divider()
-    
-    keywords_map = {
-        (12, 1, 2): ["월동 관리", "한파", "전정", "화재 예방"],
-        (3, 4, 5): ["파종", "육묘", "냉해", "꽃가루 매개"],
-        (6, 7, 8): ["장마", "탄저병", "침수", "고온"],
-        (9, 10, 11): ["수확", "건조", "가을 파종", "단풍"]
-    }
-    recommendations = []
-    for months, tags in keywords_map.items():
-        if current_month in months:
-            recommendations = tags
-            break
-            
-    st.markdown(f"### {material_icon('lightbulb', color='#fbbc04')} {current_month}월 추천 검색어", unsafe_allow_html=True)
-    
-    if 'search_query' not in st.session_state:
-        st.session_state.search_query = ""
+if 'search_query' not in st.session_state:
+    st.session_state.search_query = ""
+if 'selected_week_id' not in st.session_state:
+    st.session_state.selected_week_id = None
 
-    cols = st.columns(2)
-    for i, tag in enumerate(recommendations):
-        if cols[i % 2].button(f"#{tag}", key=f"btn_{tag}", use_container_width=True):
-            st.session_state.search_query = tag
-
-    st.divider()
-    st.markdown(f"{material_icon('bar_chart', color='#1a73e8')} **이달의 데이터 분포**", unsafe_allow_html=True)
-    trends = get_monthly_trends(current_month, con)
-    if trends:
-        trend_df = {row[0]: row[1] for row in trends[:5]}
-        st.bar_chart(trend_df, height=150, color='#1a73e8')
-    else:
-        st.caption("데이터 집계 중...")
+# 추천 검색어 로직 이동
+keywords_map = {
+    (12, 1, 2): ["월동 관리", "한파", "전정", "화재 예방"],
+    (3, 4, 5): ["파종", "육묘", "냉해", "꽃가루 매개"],
+    (6, 7, 8): ["장마", "탄저병", "침수", "고온"],
+    (9, 10, 11): ["수확", "건조", "가을 파종", "단풍"]
+}
+recommendations = []
+for months, tags in keywords_map.items():
+    if current_month in months:
+        recommendations = tags
+        break
 
 # ==========================================
-# 5. 메인: 과거 데이터 (History)
+# 5. 메인 레이아웃 및 과거 데이터
 # ==========================================
-st.markdown(f"### {material_icon('calendar_month', size=28, color='#1a73e8')} {current_month}월의 과거 농사 기록 (최근 3년)", unsafe_allow_html=True)
+# 메인 헤더
+header_col1, header_col2 = st.columns([0.1, 0.9])
+with header_col2:
+    st.markdown(f"## {material_icon('agriculture', size=36, color='#34a853')} 스마트 농업 대시보드", unsafe_allow_html=True)
 
-with st.expander(f"지난 3년간 오늘 이맘때의 주요 정보 보기", expanded=True):
+# 오늘 날짜를 기준으로 제목 동적 생성
+title_date = today.strftime("%m월 %d일")
+st.markdown(f"### {material_icon('calendar_month', size=28, color='#1a73e8')} {title_date}의 과거 농사 기록 (최근 3년)", unsafe_allow_html=True)
+
+# 과거 기록 데이터 조회 및 섹션 구성
+with st.container(border=True):
     history_sql = """
         SELECT id, year, category, content 
         FROM farming 
@@ -241,32 +232,36 @@ with st.expander(f"지난 3년간 오늘 이맘때의 주요 정보 보기", exp
         ORDER BY year DESC, category
     """
     try:
-        rows = con.execute(history_sql, [current_month]).fetchall()
-        valid_items = []
-        seen_contents = set()
+        # 아카이브로 특정 주간을 선택한 경우 해당 데이터만 조회, 아니면 오늘 날짜 기준
+        if st.session_state.selected_week_id:
+            rows = con.execute("SELECT id, year, category, content FROM farming WHERE id = ? AND category != '목차'", [st.session_state.selected_week_id]).fetchall()
+            valid_items = rows
+        else:
+            rows = con.execute(history_sql, [current_month]).fetchall()
+            valid_items = []
+            seen_contents = set()
 
-        for r in rows:
-            rid, ryear, rcat, rcontent = r
-            content_sig = re.sub(r'\s+', '', rcontent)[:50]
-            if content_sig in seen_contents: continue
-            seen_contents.add(content_sig)
+            for r in rows:
+                rid, ryear, rcat, rcontent = r
+                content_sig = re.sub(r'\s+', '', rcontent)[:50]
+                if content_sig in seen_contents: continue
+                seen_contents.add(content_sig)
 
-            try:
-                start_str, end_str = rid.split('~')
-                s_date = datetime.strptime(start_str, "%Y-%m-%d").replace(year=today.year)
-                e_date = datetime.strptime(end_str, "%Y-%m-%d").replace(year=today.year)
-                target_date = today
-                
-                if s_date <= target_date <= e_date:
-                    is_match = True
-                else:
-                    days_diff = min(abs((target_date - s_date).days), abs((target_date - e_date).days))
-                    is_match = days_diff <= 3
-                
-                if is_match:
-                    valid_items.append(r)
-            except:
-                continue
+                try:
+                    start_str, end_str = rid.split('~')
+                    s_date = datetime.strptime(start_str, "%Y-%m-%d").replace(year=today.year)
+                    e_date = datetime.strptime(end_str, "%Y-%m-%d").replace(year=today.year)
+                    
+                    if s_date <= today <= e_date:
+                        is_match = True
+                    else:
+                        days_diff = min(abs((today - s_date).days), abs((today - e_date).days))
+                        is_match = days_diff <= 3
+                    
+                    if is_match:
+                        valid_items.append(r)
+                except:
+                    continue
 
         if valid_items:
             grouped = {}
@@ -275,41 +270,90 @@ with st.expander(f"지난 3년간 오늘 이맘때의 주요 정보 보기", exp
                 if y not in grouped: grouped[y] = []
                 grouped[y].append(item)
             
+            # 연도별 세로 전개
             for y in sorted(grouped.keys(), reverse=True)[:3]:
                 st.markdown(f"**{material_icon('push_pin', color='#ea4335')} {y}년 기록**", unsafe_allow_html=True)
+                
+                # 내용 2단 2행 (최대 4개) 그리드 배치
                 cols = st.columns(2)
                 for idx, item in enumerate(grouped[y][:4]): 
                     cat, content = item[2], item[3]
-                    # 'content' 카테고리는 표시하지 않음
                     cat_prefix = f"[{cat}] " if cat and cat != 'content' else ""
                     short_content = content.split('\n')[0][:30] + "..."
                     with cols[idx % 2]:
-                        with st.popover(f"{cat_prefix}{short_content}"):
+                        with st.popover(f"{cat_prefix}{short_content}", use_container_width=True):
                             st.markdown(format_content(content), unsafe_allow_html=True)
+                st.divider()
         else:
-            st.info("이맘때와 정확히 일치하는 과거 주간 정보가 없습니다.")
+            st.info("해당 기간의 과거 정보가 없습니다.")
             
     except Exception as e:
         st.error(f"데이터 조회 중 오류 발생: {e}")
 
+# ==========================================
+# 6. 하단 통합 검색 바 (필터 | 검색 | 아카이브)
+# ==========================================
 st.divider()
+bar1, bar2, bar3 = st.columns([0.15, 0.7, 0.15])
 
-# ==========================================
-# 6. 시맨틱 하이브리드 검색
-# ==========================================
-st.markdown(f"## {material_icon('search', size=32, color='#1a73e8')} 농업 지식 검색", unsafe_allow_html=True)
-
-with st.form("search_form"):
-    col1, col2 = st.columns([4, 1])
-    with col1:
-        query_input = st.text_input(
-            "질문", 
-            value=st.session_state.search_query,
-            placeholder="예: 사과 탄저병 방제 시기는?",
-            label_visibility="collapsed"
+with bar1:
+    with st.popover("🔍 분야 필터", use_container_width=True):
+        selected_cats = st.multiselect(
+            "필터링할 작목/분야:",
+            ['기상', '벼', '밭작물', '채소', '과수', '특용작물', '축산', '양봉'],
+            default=['기상', '과수']
         )
-    with col2:
-        search_btn = st.form_submit_button("검색 🚀", use_container_width=True) # Streamlit 버튼 내부엔 HTML 주입이 어려우므로 🚀 유지 혹은 텍스트만
+
+with bar2:
+    with st.form("search_form", clear_on_submit=False):
+        c1, c2 = st.columns([0.85, 0.15])
+        with c1:
+            query_input = st.text_input(
+                "질문", 
+                value=st.session_state.search_query,
+                placeholder="예: 사과 탄저병 방제 시기는?",
+                label_visibility="collapsed"
+            )
+        with c2:
+            search_btn = st.form_submit_button("🔍")
+
+with bar3:
+    with st.popover("📅 아카이브", use_container_width=True):
+        # segmented_control은 Streamlit 1.40+ 에서 st.segmented_control 로 사용 가능
+        # 지원되지 않는 환경이라면 st.radio로 대체 (여기선 요청대로 구현)
+        try:
+            arch_year = st.segmented_control("연도", ["2023", "2024", "2025"], default="2025")
+        except:
+            arch_year = st.radio("연도", ["2023", "2024", "2025"], horizontal=True)
+            
+        arch_month = st.selectbox("월", [m for m in range(1, 13)], format_func=lambda x: f"{x}월", index=current_month-1)
+        
+        weeks = get_week_list(arch_year, arch_month, con)
+        if weeks:
+            st.caption(f"{arch_year}년 {arch_month}월의 주간 목록:")
+            for w_id in weeks:
+                if st.button(f"{w_id}", key=f"week_{w_id}", use_container_width=True):
+                    st.session_state.selected_week_id = w_id
+                    st.rerun()
+        else:
+            st.caption("해당 기간의 데이터가 없습니다.")
+        
+        if st.button("🔄 오늘 날짜로 초기화", use_container_width=True):
+            st.session_state.selected_week_id = None
+            st.rerun()
+
+# 추천 검색어 칩 (Streamlit 버튼 방식)
+if recommendations:
+    st.caption("✨ 추천 검색어:")
+    # n+1 컬럼 생성 (간격 조절용 첫 컬럼 포함)
+    n_tags = len(recommendations)
+    chip_cols = st.columns([0.1] + [0.9/n_tags] * n_tags)
+    for i, tag in enumerate(recommendations):
+        if chip_cols[i+1].button(f"#{tag}", key=f"chip_{tag}", use_container_width=True):
+            st.session_state.search_query = tag
+            st.rerun()
+else:
+    st.caption("현재 추천 검색어가 없습니다.")
 
 if search_btn and query_input:
     cat_filter_sql = ""
