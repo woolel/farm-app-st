@@ -325,19 +325,18 @@ with st.container(border=True):
         else:
             rows = con.execute(history_sql, [current_month]).fetchall()
             valid_items = []
-            seen_contents = set()
-
+            
+            # [수정] 내용 기반 중복 제거(seen_contents) 삭제 -> 연도별 데이터 독립성 보장
             for r in rows:
                 rid, ryear, rcat, rcontent = r
-                content_sig = re.sub(r'\s+', '', rcontent)[:50]
-                if content_sig in seen_contents: continue
-                seen_contents.add(content_sig)
-
+                
                 try:
                     start_str, end_str = rid.split('~')
+                    # 과거 연도의 날짜를 현재 연도로 치환하여 비교
                     s_date = datetime.strptime(start_str, "%Y-%m-%d").replace(year=today.year)
                     e_date = datetime.strptime(end_str, "%Y-%m-%d").replace(year=today.year)
                     
+                    # 현재 날짜가 해당 주간 범위 내(혹은 근사)에 있는지 확인
                     if s_date <= today <= e_date:
                         is_match = True
                     else:
@@ -363,9 +362,11 @@ with st.container(border=True):
                 # 내용 2단 2행 (최대 4개) 그리드 배치
                 cols = st.columns(2)
                 
-                # [수정] '요약' 카테고리 우선 정렬 (요약=0순위, 나머지=1순위)
-                # item 구조: (id, year, category, content)
-                sorted_items = sorted(grouped[y], key=lambda x: (0 if x[2] == '요약' else 1, x[2]))
+                # [수정] 정렬 로직 강화: 공백 제거 후 비교
+                sorted_items = sorted(grouped[y], key=lambda x: (
+                    0 if x[2].strip() == '요약' else 1, 
+                    x[2].strip()
+                ))
                 
                 for idx, item in enumerate(sorted_items[:4]): 
                     cat, content = item[2], item[3]
