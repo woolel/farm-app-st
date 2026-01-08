@@ -192,6 +192,7 @@ def format_content(text):
     output = []
     
     i = 0
+    i = 0
     while i < len(lines):
         line = lines[i]
         clean_line = line.strip()
@@ -205,47 +206,52 @@ def format_content(text):
                 if '|' in next_line and '-' in next_line and not any(c.isalnum() for c in next_line):
                     is_table_start = True
             
-            # [수정] 테이블 헤더와 구분선은 들여쓰기를 제거하여 강제로 최상위 레벨로 맞춤
-            # (들여쓰기가 있으면 코드 블럭으로 인식될 수 있음)
-            
-            # Case 1: 구분선이 없어서 강제 삽입해야 하는 경우
-            if not is_table_start and clean_line.count('|') >= 2:
-                if output and output[-1].strip(): # 앞라인이 비어있지 않으면 빈 줄 추가
+            # 테이블 시작 조건: (1)구분선이 있거나, (2)구분선이 없지만 파이프가 2개 이상일 때
+            if is_table_start or (clean_line.count('|') >= 2):
+                
+                # 테이블 앞 빈 줄 확보
+                if output and output[-1].strip():
                     output.append("")
-                    
-                output.append(clean_line) # 헤더 (공백 제거됨)
                 
-                # 가상 구분선 생성
-                col_count = clean_line.count('|') - 1
-                if col_count < 1: col_count = 1
-                separator = "|" + " --- |" * col_count
-                output.append(separator)
+                # 테이블 블록 수집 시작
+                table_lines = []
+                table_lines.append(clean_line) # 헤더 추가
                 
+                if not is_table_start:
+                    # 구분선 강제 생성 (없을 경우)
+                    col_count = clean_line.count('|') - 1
+                    if col_count < 1: col_count = 1
+                    separator = "|" + " --- |" * col_count
+                    table_lines.append(separator)
+                else:
+                    # 구분선이 있으면 다음 줄(구분선)도 추가하고 인덱스 증가
+                    table_lines.append(lines[i+1].strip())
+                    i += 1
+                
+                # 이어지는 테이블 행 수집 (빈 줄 무시하고 합침)
                 i += 1
+                while i < len(lines):
+                    next_content_line = lines[i].strip()
+                    
+                    # 파이프가 있는 행은 테이블 데이터로 간주
+                    if '|' in next_content_line:
+                        table_lines.append(next_content_line)
+                        i += 1
+                    # 빈 줄은 건너뜀 (테이블 연속성 유지)
+                    elif not next_content_line:
+                        i += 1
+                        continue
+                    # 파이프가 없는 텍스트가 나오면 테이블 종료
+                    else:
+                        # i를 증가시키지 않고 루프 탈출 (바깥 루프에서 처리하도록)
+                        break
+                
+                # 수집된 테이블 전체 출력
+                output.extend(table_lines)
                 continue
-            
-            # Case 2: 이미 정상적인 테이블 시작인 경우 (헤더+구분선) 도 들여쓰기 제거
-            elif is_table_start:
-                 if output and output[-1].strip():
-                    output.append("")
-                 output.append(clean_line) # 헤더
-                 # 다음 줄(구분선)은 루프 돌면서 자연스럽게 처리되겠지만, 
-                 # 여기서 명시적으로 처리하는 게 안전할 수도 있음. 
-                 # 하지만 여기선 헤더만 strip하고 넘어가면 다음 줄도 일반 로직 타면서 strip 안 될 수 있으니
-                 # 테이블 내부 행들은 모두 strip 해주는 로직이 필요함.
-                 
-                 # 일단 헤더만 처리하고 i 증가. 아래 'else'로 빠지지 않게 주의.
-                 # 사실 이 while루프 구조상 아래 else로 가서 append(line) 하게됨.
-                 # 따라서 여기서 append하고 continue해야 함.
-                 i += 1
-                 continue
-        
-        # 일반 라인이지만, 혹시 테이블 내용 행(데이터 행)인 경우도 들여쓰기 제거하면 좋음
-        # 파이프가 포함된 행은 strip 처리
-        if '|' in clean_line:
-             output.append(clean_line)
-        else:
-             output.append(line)
+
+        # 테이블이 아닌 일반 라인
+        output.append(line)
         i += 1
             
     return '\n'.join(output)
