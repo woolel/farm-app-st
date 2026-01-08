@@ -82,35 +82,43 @@ try:
             
             entry = json.loads(line)
             
-            # 메타데이터 추출
+            # 메타데이터 추출 (공통)
             week_id = entry.get('id')
             year = entry.get('year')
             month = entry.get('month')
             
-            # 데이터 구조 파악 (평탄화 여부에 따라 처리)
-            if 'content' in entry and isinstance(entry['content'], dict):
-                target_dict = entry['content']
+            # [유형 1] 명시적 스키마: {"category": "벼", "content": "..."} (최적화된 형식)
+            if 'category' in entry and 'content' in entry:
+                cat = entry['category']
+                content = entry['content']
+                if content and isinstance(content, str) and len(content.strip()) >= 5:
+                    processed_rows.append({
+                        "id": week_id,
+                        "year": year,
+                        "month": month,
+                        "category": cat,
+                        "content": content.strip()
+                    })
+            
+            # [유형 2] 동적 스키마: {"벼": "...", "기상": "..."} (기존 호환성)
             else:
-                target_dict = entry
-
-            # 각 카테고리별로 데이터 분리 (Granular Split)
-            for key, val in target_dict.items():
-                # 메타데이터 키는 건너뜀
-                if key in ['id', 'year', 'month', 'week_range', 'start_date', 'end_date']:
-                    continue
+                target_dict = entry.get('content', entry) if isinstance(entry.get('content'), dict) else entry
                 
-                # 유효한 데이터인지 확인 (너무 짧거나 비어있으면 제외)
-                if not val or not isinstance(val, str) or len(val.strip()) < 5:
-                    continue
+                for key, val in target_dict.items():
+                    # 메타데이터 키는 건너뜀
+                    if key in ['id', 'year', 'month', 'week_range', 'start_date', 'end_date', 'category']:
+                        continue
+                    
+                    if not val or not isinstance(val, str) or len(val.strip()) < 5:
+                        continue
 
-                clean_content = val.strip()
-                processed_rows.append({
-                    "id": week_id,
-                    "year": year,
-                    "month": month,
-                    "category": key,
-                    "content": clean_content
-                })
+                    processed_rows.append({
+                        "id": week_id,
+                        "year": year,
+                        "month": month,
+                        "category": key,
+                        "content": val.strip()
+                    })
 
 except FileNotFoundError:
     print(f"❌ 오류: 입력 파일({INPUT_FILE})을 찾을 수 없습니다.")
