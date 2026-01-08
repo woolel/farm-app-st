@@ -182,13 +182,47 @@ def material_icon(name, size=20, color=None, font_weight=400):
 def format_content(text):
     """
     텍스트 포맷팅 함수
-    - 데이터가 정제되었으므로 복잡한 테이블 파싱 로직 제거
-    - Streamlit 마크다운 렌더링을 위해 일부 특수문자만 처리
+    - 기본적으로 Streamlit 마크다운 렌더링 사용
+    - 마크다운 테이블이 깨지는 경우(구분선 누락 등)를 대비한 최소한의 보정 로직 적용
     """
     if not text: return ""
-    # 물결표 이스케이프 (Streamlit에서 취소선으로 인식되는 문제 방지)
-    text = text.replace('~', r'\~') 
-    return text
+    text = text.replace('~', r'\~') # 물결표 이스케이프
+    
+    lines = text.splitlines()
+    output = []
+    
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        clean_line = line.strip()
+        
+        # 테이블 헤더 감지 (파이프가 있고 내용이 있는 첫 줄)
+        if '|' in clean_line and any(c.isalnum() for c in clean_line):
+            # 다음 줄이 구분선(|---|)인지 확인
+            is_table_start = False
+            if i + 1 < len(lines):
+                next_line = lines[i+1].strip()
+                if '|' in next_line and '-' in next_line and not any(c.isalnum() for c in next_line):
+                    is_table_start = True
+            
+            # 구분선이 없는데 파이프가 많은 경우 -> 테이블로 간주하고 구분선 강제 삽입
+            if not is_table_start and clean_line.count('|') >= 2:
+                # 현재 줄 출력 (헤더)
+                output.append(line)
+                
+                # 가상 구분선 생성 (헤더의 파이프 개수에 맞춰)
+                col_count = clean_line.count('|') - 1
+                if col_count < 1: col_count = 1
+                separator = "|" + " --- |" * col_count
+                output.append(separator)
+                
+                i += 1
+                continue
+
+        output.append(line)
+        i += 1
+            
+    return '\n'.join(output)
 
 # ==========================================
 # 4. 앱 상태 관리 및 상수
