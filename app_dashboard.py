@@ -362,7 +362,12 @@ with st.container(border=True):
                 
                 # 내용 2단 2행 (최대 4개) 그리드 배치
                 cols = st.columns(2)
-                for idx, item in enumerate(grouped[y][:4]): 
+                
+                # [수정] '요약' 카테고리 우선 정렬 (요약=0순위, 나머지=1순위)
+                # item 구조: (id, year, category, content)
+                sorted_items = sorted(grouped[y], key=lambda x: (0 if x[2] == '요약' else 1, x[2]))
+                
+                for idx, item in enumerate(sorted_items[:4]): 
                     cat, content = item[2], item[3]
                     cat_prefix = f"[{cat}] " if cat and cat != 'content' else ""
                     short_content = content.split('\n')[0][:30] + "..."
