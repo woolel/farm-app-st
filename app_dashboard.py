@@ -180,73 +180,15 @@ def material_icon(name, size=20, color=None, font_weight=400):
     return f"<span class='material-symbols-outlined material-icon' style='{style}'>{name}</span>"
 
 def format_content(text):
+    """
+    텍스트 포맷팅 함수
+    - 데이터가 정제되었으므로 복잡한 테이블 파싱 로직 제거
+    - Streamlit 마크다운 렌더링을 위해 일부 특수문자만 처리
+    """
     if not text: return ""
-    # 물결표 이스케이프 (Streamlit 특수 기호)
+    # 물결표 이스케이프 (Streamlit에서 취소선으로 인식되는 문제 방지)
     text = text.replace('~', r'\~') 
-    lines = text.splitlines()
-    output = []
-    
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        clean_line = line.strip()
-        
-        # 테이블 블록 감지 (파이프가 있고 실질적인 텍스트 내용이 있는 행)
-        # 단순히 '-' 나 '.' 만 있는 구분선 행은 제외
-        has_real_content = any(c.isalnum() for c in clean_line)
-        if '|' in clean_line and has_real_content:
-            table_rows_data = []
-            max_cols = 0
-            
-            # 연속된 테이블 행 수집
-            while i < len(lines):
-                curr_line = lines[i].strip()
-                if '|' not in curr_line:
-                    break
-                
-                # 가공: 도트 리더 제거 및 중복 파이프 정리
-                processed = curr_line.replace('···', '').replace('...', '')
-                processed = re.sub(r'\|+', '|', processed) # ||| -> |
-                
-                # 셀 분해 및 유효성 확인
-                cells = [c.strip() for c in processed.strip('|').split('|')]
-                # 후행 빈 셀 제거
-                while cells and not cells[-1]: cells.pop()
-                
-                # 실질적인 글자가 있는 행만 수집
-                if cells and any(any(c.isalnum() for c in cell) for cell in cells):
-                    table_rows_data.append(cells)
-                    max_cols = max(max_cols, len(cells))
-                
-                i += 1
-            
-            if table_rows_data:
-                # 열 개수 품질 관리: 너무 많으면(TOC 망가진 경우) 최대 5열로 제한
-                if max_cols > 5: max_cols = 5
-                
-                final_table = []
-                for idx, row_cells in enumerate(table_rows_data):
-                    # 열 제한에 맞춰 데이터 절삭 및 병합
-                    if len(row_cells) > max_cols:
-                        row_cells = row_cells[:max_cols-1] + [" ".join(row_cells[max_cols-1:])]
-                    
-                    padded_row = row_cells + [""] * (max_cols - len(row_cells))
-                    md_row = "| " + " | ".join(padded_row) + " |"
-                    final_table.append(md_row)
-                    
-                    if idx == 0:
-                        separator = "|" + " --- |" * max_cols
-                        final_table.append(separator)
-                
-                output.extend(final_table)
-            else:
-                # 유효 내용이 없던 경우 i는 이미 위에서 증가했으므로 별도 처리 불필요하거나 i += 1
-                pass
-        else:
-            output.append(line)
-            i += 1
-            
-    return '\n'.join(output)
+    return text
 
 # ==========================================
 # 4. 앱 상태 관리 및 상수
