@@ -18,6 +18,9 @@ st.set_page_config(
 # CSS 스타일 커스텀
 st.markdown("""
     <style>
+    /* 0. Material Symbols CDN 로드 */
+    @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0');
+
     /* 1. 한글 폰트 강제 적용 */
     html, body, [class*="css"] {
         font-family: "Pretendard", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif !important;
@@ -45,16 +48,23 @@ st.markdown("""
     th { 
         background-color: #f8f9fa !important; 
         font-weight: bold; 
-        color: #333;
+        color: #202124;
     }
     
-    /* 4. 검색어 하이라이트 스타일 */
+    /* 4. 검색어 하이라이트 스타일 (Google Blue) */
     .highlight { 
-        background-color: #fff9c4; 
+        background-color: #e8f0fe; 
         padding: 2px 4px; 
         border-radius: 4px; 
         font-weight: bold; 
-        color: #d32f2f;
+        color: #1a73e8;
+    }
+
+    /* 5. Material Icon 스타일 */
+    .material-icon {
+        vertical-align: middle;
+        margin-right: 4px;
+        line-height: 1;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -111,15 +121,22 @@ if isinstance(status, str) and "error" in status:
     st.stop()
 
 if status == "file_not_found":
-    st.error("❌ 'farming_granular.duckdb' 데이터베이스 파일이 없습니다.")
+    st.error(f"{material_icon('error', color='#ea4335')} 'farming_granular.duckdb' 데이터베이스 파일이 없습니다.", unsafe_allow_html=True)
     st.stop()
 
 if status == "fts_missing":
-    st.warning("⚠️ 검색 인덱스(FTS)가 감지되지 않아 키워드 검색 성능이 저하될 수 있습니다.")
+    st.warning(f"{material_icon('warning', color='#fbbc04')} 검색 인덱스(FTS)가 감지되지 않아 키워드 검색 성능이 저하될 수 있습니다.", unsafe_allow_html=True)
 
 # ==========================================
 # 3. 유틸리티 함수
 # ==========================================
+def material_icon(name, size=20, color=None, font_weight=400):
+    """Material Symbols 아이콘을 반환하는 헬퍼 함수"""
+    style = f"font-size:{size}px; font-weight:{font_weight};"
+    if color:
+        style += f"color:{color};"
+    return f"<span class='material-symbols-outlined material-icon' style='{style}'>{name}</span>"
+
 def format_content(text):
     if not text: return ""
     text = text.replace('~', r'\~') 
@@ -145,10 +162,10 @@ today = datetime.now()
 current_month = today.month
 
 with st.sidebar:
-    st.title("🚜 스마트 농업 봇")
+    st.markdown(f"## {material_icon('agriculture', size=32, color='#34a853')} 스마트 농업 봇", unsafe_allow_html=True)
     st.info(f"오늘 날짜: {today.year}년 {today.month}월 {today.day}일")
     
-    st.markdown("### 🏷️ 관심 분야 설정")
+    st.markdown(f"### {material_icon('sell', color='#1a73e8')} 관심 분야 설정", unsafe_allow_html=True)
     selected_cats = st.multiselect(
         "필터링할 작목/분야:",
         ['기상', '벼', '밭작물', '채소', '과수', '특용작물', '축산', '양봉'],
@@ -169,7 +186,7 @@ with st.sidebar:
             recommendations = tags
             break
             
-    st.markdown(f"### 💡 {current_month}월 추천 검색어")
+    st.markdown(f"### {material_icon('lightbulb', color='#fbbc04')} {current_month}월 추천 검색어", unsafe_allow_html=True)
     
     if 'search_query' not in st.session_state:
         st.session_state.search_query = ""
@@ -180,20 +197,20 @@ with st.sidebar:
             st.session_state.search_query = tag
 
     st.divider()
-    st.markdown("📊 **이달의 데이터 분포**")
+    st.markdown(f"{material_icon('bar_chart', color='#1a73e8')} **이달의 데이터 분포**", unsafe_allow_html=True)
     trends = get_monthly_trends(current_month, con)
     if trends:
         trend_df = {row[0]: row[1] for row in trends[:5]}
-        st.bar_chart(trend_df, height=150)
+        st.bar_chart(trend_df, height=150, color='#1a73e8')
     else:
         st.caption("데이터 집계 중...")
 
 # ==========================================
 # 5. 메인: 과거 데이터 (History)
 # ==========================================
-st.subheader(f"📅 {current_month}월의 과거 농사 기록 (최근 3년)")
+st.markdown(f"### {material_icon('calendar_month', size=28, color='#1a73e8')} {current_month}월의 과거 농사 기록 (최근 3년)", unsafe_allow_html=True)
 
-with st.expander("🔻 지난 3년간 오늘 이맘때의 주요 정보 보기", expanded=True):
+with st.expander(f"지난 3년간 오늘 이맘때의 주요 정보 보기", expanded=True):
     history_sql = """
         SELECT id, year, category, content 
         FROM farming 
@@ -238,7 +255,7 @@ with st.expander("🔻 지난 3년간 오늘 이맘때의 주요 정보 보기",
                 grouped[y].append(item)
             
             for y in sorted(grouped.keys(), reverse=True)[:3]:
-                st.markdown(f"**📌 {y}년 기록**")
+                st.markdown(f"**{material_icon('push_pin', color='#ea4335')} {y}년 기록**", unsafe_allow_html=True)
                 cols = st.columns(2)
                 for idx, item in enumerate(grouped[y][:4]): 
                     cat, content = item[2], item[3]
@@ -257,7 +274,7 @@ st.divider()
 # ==========================================
 # 6. 시맨틱 하이브리드 검색
 # ==========================================
-st.header("🔍 농업 지식 검색")
+st.markdown(f"## {material_icon('search', size=32, color='#1a73e8')} 농업 지식 검색", unsafe_allow_html=True)
 
 with st.form("search_form"):
     col1, col2 = st.columns([4, 1])
@@ -269,7 +286,7 @@ with st.form("search_form"):
             label_visibility="collapsed"
         )
     with col2:
-        search_btn = st.form_submit_button("검색 🚀", use_container_width=True)
+        search_btn = st.form_submit_button("검색 🚀", use_container_width=True) # Streamlit 버튼 내부엔 HTML 주입이 어려우므로 🚀 유지 혹은 텍스트만
 
 if search_btn and query_input:
     cat_filter_sql = ""
@@ -303,7 +320,7 @@ if search_btn and query_input:
             results = con.execute(search_sql, [query_vector, query_input]).fetchall()
             
             if not results:
-                st.warning("🤔 검색 결과가 없습니다. 질문을 구체적으로 바꾸거나 필터를 해제해보세요.")
+                st.warning(f"{material_icon('sentiment_dissatisfied', color='#fbbc04')} 검색 결과가 없습니다. 질문을 구체적으로 바꾸거나 필터를 해제해보세요.", unsafe_allow_html=True)
             else:
                 st.success(f"총 {len(results)}건의 관련 정보를 찾았습니다.")
                 
@@ -315,7 +332,7 @@ if search_btn and query_input:
                     if f_score is None: f_score = 0.0
                     
                     # 뱃지 로직
-                    badge_color = "#4CAF50" if v_score > 0.65 else "#FF9800"
+                    badge_color = "#34a853" if v_score > 0.65 else "#fbbc04"
                     match_type = "AI+키워드" if f_score > 0 else "AI추론"
                     
                     with st.container(border=True):
