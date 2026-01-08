@@ -181,20 +181,56 @@ def material_icon(name, size=20, color=None, font_weight=400):
 
 def format_content(text):
     if not text: return ""
+    # 물결표 이스케이프 (Streamlit 특수 기호)
     text = text.replace('~', r'\~') 
     lines = text.split('\n')
     formatted_lines = []
     
+    in_table = False
     for i, line in enumerate(lines):
-        line = line.strip()
-        if '|' in line and len(line) > 3:
-            processed_line = line.replace('|', ' | ')
-            processed_line = re.sub(r'\s+\|\s+', ' | ', processed_line) 
-            if i > 0 and '|' not in lines[i-1]:
-                formatted_lines.append("") 
-            formatted_lines.append(processed_line)
+        clean_line = line.strip()
+        # 파이프가 포함된 행 감지 (내용이 있는 경우만)
+        has_pipe = '|' in clean_line and len(clean_line.replace('|', '').strip()) > 0
+        
+        if has_pipe:
+            # 1. 파이프 기호 주변 공백 정규화 및 정리
+            processed_line = re.sub(r'\s*\|\s*', ' | ', clean_line).strip()
+            # 2. 시작과 끝에 파이프 강제 추가 (마크다운 엔진 안정성)
+            if not processed_line.startswith('|'): processed_line = '| ' + processed_line
+            if not processed_line.endswith('|'): processed_line = processed_line + ' |'
+            
+            if not in_table:
+                # 테이블 시작 감지
+                # 본문과 테이블 사이 공백 확보 (선택사항이나 마크다운 표준에 좋음)
+                if i > 0 and formatted_lines and formatted_lines[-1] != "":
+                    # 다만 직전 줄이 이미 공백이면 추가하지 않음
+                    pass 
+                
+                formatted_lines.append(processed_line)
+                
+                # 3. 필수 구분행(|---|) 삽입 여부 확인
+                # 이미 구분행이 존재하는지 다음 줄 확인
+                next_is_separator = False
+                if i + 1 < len(lines):
+                    next_clean = lines[i+1].strip()
+                    if next_clean.startswith('|') and '-' in next_clean:
+                        next_is_separator = True
+                
+                if not next_is_separator:
+                    # 열 개수 계산하여 구분행 생성
+                    num_cols = processed_line.count('|') - 1
+                    if num_cols > 0:
+                        separator = "|" + "---|" * num_cols
+                        formatted_lines.append(separator)
+                
+                in_table = True
+            else:
+                formatted_lines.append(processed_line)
         else:
+            if in_table:
+                in_table = False
             formatted_lines.append(line)
+            
     return '\n'.join(formatted_lines)
 
 # ==========================================
