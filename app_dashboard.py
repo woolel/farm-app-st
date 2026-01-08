@@ -205,12 +205,17 @@ def format_content(text):
                 if '|' in next_line and '-' in next_line and not any(c.isalnum() for c in next_line):
                     is_table_start = True
             
-            # 구분선이 없는데 파이프가 많은 경우 -> 테이블로 간주하고 구분선 강제 삽입
+            # [수정] 테이블 헤더와 구분선은 들여쓰기를 제거하여 강제로 최상위 레벨로 맞춤
+            # (들여쓰기가 있으면 코드 블럭으로 인식될 수 있음)
+            
+            # Case 1: 구분선이 없어서 강제 삽입해야 하는 경우
             if not is_table_start and clean_line.count('|') >= 2:
-                # 현재 줄 출력 (헤더)
-                output.append(line)
+                if output and output[-1].strip(): # 앞라인이 비어있지 않으면 빈 줄 추가
+                    output.append("")
+                    
+                output.append(clean_line) # 헤더 (공백 제거됨)
                 
-                # 가상 구분선 생성 (헤더의 파이프 개수에 맞춰)
+                # 가상 구분선 생성
                 col_count = clean_line.count('|') - 1
                 if col_count < 1: col_count = 1
                 separator = "|" + " --- |" * col_count
@@ -218,8 +223,29 @@ def format_content(text):
                 
                 i += 1
                 continue
-
-        output.append(line)
+            
+            # Case 2: 이미 정상적인 테이블 시작인 경우 (헤더+구분선) 도 들여쓰기 제거
+            elif is_table_start:
+                 if output and output[-1].strip():
+                    output.append("")
+                 output.append(clean_line) # 헤더
+                 # 다음 줄(구분선)은 루프 돌면서 자연스럽게 처리되겠지만, 
+                 # 여기서 명시적으로 처리하는 게 안전할 수도 있음. 
+                 # 하지만 여기선 헤더만 strip하고 넘어가면 다음 줄도 일반 로직 타면서 strip 안 될 수 있으니
+                 # 테이블 내부 행들은 모두 strip 해주는 로직이 필요함.
+                 
+                 # 일단 헤더만 처리하고 i 증가. 아래 'else'로 빠지지 않게 주의.
+                 # 사실 이 while루프 구조상 아래 else로 가서 append(line) 하게됨.
+                 # 따라서 여기서 append하고 continue해야 함.
+                 i += 1
+                 continue
+        
+        # 일반 라인이지만, 혹시 테이블 내용 행(데이터 행)인 경우도 들여쓰기 제거하면 좋음
+        # 파이프가 포함된 행은 strip 처리
+        if '|' in clean_line:
+             output.append(clean_line)
+        else:
+             output.append(line)
         i += 1
             
     return '\n'.join(output)
