@@ -67,6 +67,14 @@ st.markdown("""
         margin-right: 4px;
         line-height: 1;
     }
+
+    /* 6. 메인 컨테이너 폭 조정 및 중앙 정렬 (데스크탑) */
+    .block-container {
+        max-width: 900px;
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+        margin: 0 auto;
+    }
     </style>
     """, unsafe_allow_html=True)
 
