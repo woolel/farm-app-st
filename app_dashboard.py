@@ -74,6 +74,10 @@ st.markdown("""
         padding-top: 2rem;
         padding-bottom: 2rem;
         margin: 0 auto;
+    /* 7. 하단 팝오버 상단 전개 설정 */
+    div[data-testid="stPopoverBody"] {
+        bottom: 50px !important;
+        top: auto !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -305,9 +309,9 @@ st.divider()
 bar1, bar2, bar3 = st.columns([0.15, 0.7, 0.15])
 
 with bar1:
-    with st.popover("🔍 분야 필터", use_container_width=True):
+    with st.popover("🔍 작목 선택", use_container_width=True):
         selected_cats = st.multiselect(
-            "필터링할 작목/분야:",
+            "필터링할 작목:",
             ['기상', '벼', '밭작물', '채소', '과수', '특용작물', '축산', '양봉'],
             default=['기상', '과수']
         )
