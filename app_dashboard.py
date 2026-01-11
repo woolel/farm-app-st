@@ -1,5 +1,6 @@
 import streamlit as st
 import duckdb
+import torch
 from sentence_transformers import SentenceTransformer
 from datetime import datetime
 import re
@@ -96,7 +97,7 @@ if status != "ok":
     st.stop()
 
 # ==========================================
-# 3. 유틸리티 및 데이터 함수
+# 3. 유틸리티 함수 (알고리즘 추가됨)
 # ==========================================
 def format_content(text):
     if not text: return ""
@@ -106,7 +107,6 @@ def format_content(text):
 @st.cache_data(ttl=3600)
 def get_week_list(year, month):
     try:
-        # SyntaxWarning 해결을 위해 r'' 문자열 사용
         sql = """
             SELECT DISTINCT regexp_extract(title, r'\[(.*?)\]', 1) as week_range 
             FROM farm_info 
@@ -126,6 +126,68 @@ def get_all_categories():
     except:
         return []
 
+def organize_items_smartly(items, target_date_obj):
+    """
+    [핵심 알고리즘]
+    1. 해당 연도의 데이터 중 target_date(오늘 또는 선택일)와 가장 가까운 주간을 찾음
+    2. 그 주간의 데이터 중에서 요약(1순위) -> 기상(2순위) -> 나머지 순으로 정렬
+    """
+    if not items: return []
+
+    # 1. 주간별로 그룹화
+    weeks_group = {}
+    for item in items:
+        # item[4] is w_range string "YYYY-MM-DD~..."
+        w_range = item[4]
+        if not w_range: continue
+        if w_range not in weeks_group: weeks_group[w_range] = []
+        weeks_group[w_range].append(item)
+    
+    if not weeks_group: return []
+
+    # 2. 타겟 날짜와 가장 가까운 주간 찾기
+    best_week = None
+    min_diff_days = 9999
+    
+    for w_str in weeks_group.keys():
+        try:
+            start_str = w_str.split('~')[0] # "2023-01-01"
+            w_date = datetime.strptime(start_str, "%Y-%m-%d")
+            # 연도 차이는 무시하고 월/일 차이만 비교하기 위해 연도 통일
+            w_date_adj = w_date.replace(year=target_date_obj.year)
+            
+            diff = abs((target_date_obj - w_date_adj).days)
+            if diff < min_diff_days:
+                min_diff_days = diff
+                best_week = w_str
+        except:
+            continue
+            
+    if not best_week:
+        # 날짜 파싱 실패 시 그냥 첫 번째 주간 선택
+        best_week = list(weeks_group.keys())[0]
+
+    # 3. 최적 주간의 아이템들 가져오기
+    target_items = weeks_group[best_week]
+    
+    # 4. 우선순위 정렬 (요약 -> 기상 -> 나머지)
+    summary_list = []
+    weather_list = []
+    others_list = []
+    
+    for item in target_items:
+        title = item[1]
+        if '요약' in title or '요 약' in title:
+            summary_list.append(item)
+        elif '기상' in title:
+            weather_list.append(item)
+        else:
+            others_list.append(item)
+            
+    # 최종 조합: 요약(1개) + 기상(1개) + 나머지(최대 2개) = 총 4개
+    final_list = summary_list[:1] + weather_list[:1] + others_list
+    return final_list[:4]
+
 # ==========================================
 # 4. 상태 관리
 # ==========================================
@@ -135,12 +197,11 @@ AVAILABLE_YEARS = [2023, 2024, 2025]
 if 'search_query' not in st.session_state:
     st.session_state.search_query = ""
 
-# 연도 초기값 설정 (2026년 대응)
 if 'filter_year' not in st.session_state:
     if today.year in AVAILABLE_YEARS:
         st.session_state.filter_year = today.year
     else:
-        st.session_state.filter_year = AVAILABLE_YEARS[-1] # 2025
+        st.session_state.filter_year = AVAILABLE_YEARS[-1]
 
 if 'filter_month' not in st.session_state:
     st.session_state.filter_month = today.month
@@ -152,14 +213,11 @@ if 'selected_week_range' not in st.session_state:
 # ==========================================
 st.markdown(f"## {material_icon('agriculture', size=36, color='#34a853')} 스마트 농업 대시보드", unsafe_allow_html=True)
 
-# --- 필터 컨테이너 ---
 with st.container():
     st.markdown('<div class="filter-box">', unsafe_allow_html=True)
     f_col1, f_col2 = st.columns(2)
     
-    # [1] 아카이브 (날짜 선택)
     with f_col1:
-        # [수정 1] 아이콘 깨짐 해결 (unsafe_allow_html=True 추가)
         st.markdown(f"**{material_icon('calendar_month', color='#1a73e8')} 아카이브 (날짜 선택)**", unsafe_allow_html=True)
         c1, c2, c3 = st.columns([0.3, 0.3, 0.4])
         
@@ -168,14 +226,9 @@ with st.container():
                 default_idx = AVAILABLE_YEARS.index(st.session_state.filter_year)
             except ValueError:
                 default_idx = len(AVAILABLE_YEARS) - 1
-                
-            sel_year = st.selectbox("연도", AVAILABLE_YEARS, 
-                                  index=default_idx,
-                                  key='sel_year_key', label_visibility="collapsed")
+            sel_year = st.selectbox("연도", AVAILABLE_YEARS, index=default_idx, key='sel_year_key', label_visibility="collapsed")
         with c2:
-            sel_month = st.selectbox("월", range(1, 13), 
-                                   index=st.session_state.filter_month-1, 
-                                   key='sel_month_key', label_visibility="collapsed")
+            sel_month = st.selectbox("월", range(1, 13), index=st.session_state.filter_month-1, key='sel_month_key', label_visibility="collapsed")
         
         weeks_list = get_week_list(sel_year, sel_month)
         weeks_options = ["전체 보기"] + weeks_list
@@ -187,58 +240,57 @@ with st.container():
             else:
                 st.session_state.selected_week_range = sel_week
 
-    # [2] 작목 선택 (필터)
     with f_col2:
-        # [수정 1] 아이콘 깨짐 해결
         st.markdown(f"**{material_icon('filter_alt', color='#ea4335')} 작목 선택 (필터)**", unsafe_allow_html=True)
         all_tags = get_all_categories()
         selected_crops = st.multiselect(
-            "작목을 선택하세요 (비어있으면 전체)", 
+            "작목을 선택하세요", 
             all_tags, 
             placeholder="전체 (클릭하여 작목 선택)",
             label_visibility="collapsed"
         )
-    
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ==========================================
-# 6. 중앙 대시보드 (필터링된 과거 기록)
+# 6. 중앙 대시보드 (지능형 정렬 적용)
 # ==========================================
-# 제목 동적 생성
+# 기준 날짜 설정 (선택된 주간이 있으면 그 날짜, 없으면 오늘)
 if st.session_state.selected_week_range:
+    target_date_str = st.session_state.selected_week_range.split('~')[0]
+    target_date = datetime.strptime(target_date_str, "%Y-%m-%d")
     dashboard_title = f"{sel_year}년 {sel_month}월 ({st.session_state.selected_week_range})"
-    st.caption(f"📌 현재 조회 중: **{dashboard_title}**")
+    st.caption(f"📌 선택된 기간: **{dashboard_title}**")
 else:
-    # 전체 보기 모드일 때는 3개년 비교 모드임을 명시
-    st.caption(f"📌 **{sel_month}월**의 지난 3년 농사 기록 비교")
+    target_date = datetime.now()
+    dashboard_title = f"{sel_year}년 {sel_month}월 (오늘 날짜 기준 비교)"
+    st.caption(f"📌 **{target_date.month}월 {target_date.day}일** 기준, 지난 3년의 가장 유사한 시기 기록입니다.")
 
 with st.container(border=True):
     try:
-        rows = []
-        # A. 특정 주간 선택 시 -> 해당 주간 데이터만 조회
+        # SQL에서 w_range(주간범위 문자열)를 함께 가져와야 함
         if st.session_state.selected_week_range:
-            target_week = st.session_state.selected_week_range
+            # 특정 주간 선택 시
             query_sql = """
-                SELECT year, title, content_md, tags_crop 
+                SELECT year, title, content_md, tags_crop, regexp_extract(title, r'\[(.*?)\]', 1) as w_range
                 FROM farm_info 
                 WHERE title LIKE ?
-                AND title NOT LIKE '%요약%'
-                ORDER BY year DESC, title DESC
+                ORDER BY year DESC
             """
-            rows = con.execute(query_sql, [f'%{target_week}%']).fetchall()
-        
-        # B. 전체 보기 시 -> 선택한 '월'에 해당하는 모든 데이터 조회 (2023, 2024, 2025 모두)
+            params = [f'%{st.session_state.selected_week_range}%']
         else:
+            # 전체 보기 시 (월 전체 데이터를 가져와서 파이썬에서 날짜별로 거름)
             query_sql = """
-                SELECT year, title, content_md, tags_crop 
+                SELECT year, title, content_md, tags_crop, regexp_extract(title, r'\[(.*?)\]', 1) as w_range
                 FROM farm_info 
                 WHERE month = ?
                 AND content_md NOT LIKE '%목 차%'
-                ORDER BY year DESC, title DESC
+                ORDER BY year DESC
             """
-            rows = con.execute(query_sql, [sel_month]).fetchall()
+            params = [sel_month]
 
-        # 작목 필터링 적용
+        rows = con.execute(query_sql, params).fetchall()
+
+        # 작목 필터링
         filtered_rows = []
         if selected_crops:
             for r in rows:
@@ -248,48 +300,53 @@ with st.container(border=True):
         else:
             filtered_rows = rows
 
-        # 결과 출력 (연도별 그룹화)
         if filtered_rows:
-            # 연도별로 데이터 분류
+            # 연도별 그룹화
             grouped_by_year = {2025: [], 2024: [], 2023: []}
             for item in filtered_rows:
                 y = item[0]
                 if y in grouped_by_year:
                     grouped_by_year[y].append(item)
             
-            # [수정 2 & 3] 연도별 출력 (2025 -> 2024 -> 2023)
+            # 연도별 출력
             for year in [2025, 2024, 2023]:
                 items = grouped_by_year[year]
                 
-                # 데이터가 있을 때만 출력
                 if items:
                     st.markdown(f"##### {material_icon('calendar_today', color='#5f6368')} {year}년 기록", unsafe_allow_html=True)
                     
-                    # [수정 3] 정렬 로직: '요약'이 제목에 있으면 0순위, 나머지는 제목순
-                    # x[1] is title
-                    sorted_items = sorted(items, key=lambda x: (0 if '요약' in x[1] or '요 약' in x[1] else 1, x[1]))
+                    # [핵심] 스마트 정렬 함수 적용
+                    # target_date(오늘 또는 선택일)를 기준으로 가장 가까운 주간의 요약->기상->나머지 추출
+                    display_items = organize_items_smartly(items, target_date)
                     
-                    # [수정 3] 최대 4개까지만 슬라이싱
-                    display_items = sorted_items[:4]
-                    
+                    if not display_items:
+                        st.caption("해당 시기의 데이터가 부족합니다.")
+                        st.divider()
+                        continue
+
                     cols = st.columns(2)
                     for idx, item in enumerate(display_items):
-                        yr, title, content, tags = item
+                        # item structure: [year, title, content, tags, w_range]
+                        yr, title, content, tags, w_range = item
                         clean_title = title.split(']')[-1].strip() if ']' in title else title
                         
-                        # 요약인 경우 아이콘 추가로 강조
+                        # 아이콘 및 스타일링
+                        icon = "📄"
                         if '요약' in title or '요 약' in title:
-                            clean_title = "⭐ " + clean_title
+                            icon = "⭐" # 요약 강조
+                            clean_title = f"<b>{clean_title}</b>"
+                        elif '기상' in title:
+                            icon = "⛅" # 기상 강조
 
                         with cols[idx % 2]:
-                            with st.popover(clean_title, use_container_width=True):
+                            with st.popover(f"{icon} {clean_title}", use_container_width=True):
                                 if tags:
                                     st.caption(f"태그: {', '.join(tags)}")
-                                st.markdown(format_content(content))
+                                st.markdown(format_content(content), unsafe_allow_html=True)
                     
-                    st.divider() # 연도별 구분선
+                    st.divider()
         else:
-            st.info("조건에 맞는 데이터가 없습니다. 필터를 변경해보세요.")
+            st.info("조건에 맞는 데이터가 없습니다.")
 
     except Exception as e:
         st.error(f"데이터 로드 오류: {e}")
@@ -303,77 +360,49 @@ st.caption("위의 필터와 상관없이 모든 데이터베이스를 검색합
 with st.form("global_search_form", clear_on_submit=False):
     c1, c2 = st.columns([0.85, 0.15])
     with c1:
-        query_input = st.text_input(
-            "검색어 입력", 
-            value=st.session_state.search_query,
-            placeholder="질문을 입력하세요 (예: 봄배추 육묘, 고추 탄저병약)",
-            label_visibility="collapsed"
-        )
+        query_input = st.text_input("검색어 입력", value=st.session_state.search_query, placeholder="예: 봄배추 육묘", label_visibility="collapsed")
     with c2:
         search_btn = st.form_submit_button("검색")
 
 if search_btn and query_input:
-    with st.spinner("전체 데이터베이스 검색 중..."):
+    with st.spinner("검색 중..."):
         try:
             query_vector = model.encode(query_input).tolist()
-            
             sql = """
-                SELECT 
-                    year, month, title, content_md, 
-                    array_cosine_similarity(embedding, ?::FLOAT[768]) as score
-                FROM farm_info
-                WHERE 1=1 
-                ORDER BY score DESC
-                LIMIT 10
+                SELECT year, month, title, content_md, array_cosine_similarity(embedding, ?::FLOAT[768]) as score
+                FROM farm_info WHERE 1=1 ORDER BY score DESC LIMIT 10
             """
-            
             results = con.execute(sql, [query_vector]).fetchall()
-            
-            # 커트라인 0.40
             valid_results = [r for r in results if r[4] >= 0.40]
             
             if not valid_results:
-                st.warning("관련성이 높은 검색 결과가 없습니다.")
+                st.warning("결과 없음")
             else:
-                st.success(f"'{query_input}' 검색 결과: {len(valid_results)}건")
-                
+                st.success(f"{len(valid_results)}건 발견")
                 for row in valid_results[:5]:
                     yr, mn, title, content, score = row
                     
-                    if score >= 0.65:
-                        badge_color = "#34a853"
-                        badge_text = "강력 추천"
-                    elif score >= 0.50:
-                        badge_color = "#f9ab00"
-                        badge_text = "관련 있음"
-                    else:
-                        badge_color = "#9aa0a6"
-                        badge_text = "참고용"
+                    badge = "참고용"
+                    color = "#9aa0a6"
+                    if score >= 0.65: badge, color = "강력 추천", "#34a853"
+                    elif score >= 0.50: badge, color = "관련 있음", "#f9ab00"
                     
-                    clean_title = title.split(']')[-1].strip() if ']' in title else title
-                    
+                    clean_title = title.split(']')[-1].strip()
                     with st.container(border=True):
                         st.markdown(f"""
-                        <div style='display:flex; justify-content:space-between; align-items:center;'>
+                        <div style='display:flex; justify-content:space-between;'>
                             <span class='big-font'><b>{clean_title}</b></span>
-                            <div style='background-color:{badge_color};' class='score-badge'>
-                                {badge_text} ({score:.2f})
-                            </div>
+                            <div style='background-color:{color};' class='score-badge'>{badge} ({score:.2f})</div>
                         </div>
-                        <div style='font-size:0.8em; color:gray; margin-top:4px;'>
-                            {yr}년 {mn}월 자료
-                        </div>
+                        <div style='font-size:0.8em; color:gray;'>{yr}년 {mn}월</div>
                         """, unsafe_allow_html=True)
                         
-                        formatted_body = format_content(content)
-                        for word in query_input.split():
-                            if len(word) > 1:
-                                formatted_body = formatted_body.replace(word, f"<span class='highlight'>{word}</span>")
-                        
-                        st.markdown(formatted_body, unsafe_allow_html=True)
-                        
+                        hl_content = format_content(content)
+                        for w in query_input.split():
+                            if len(w)>1: hl_content = hl_content.replace(w, f"<span class='highlight'>{w}</span>")
+                        st.markdown(hl_content, unsafe_allow_html=True)
         except Exception as e:
-            st.error(f"검색 오류: {e}")
+            st.error(f"오류: {e}")
 
 st.markdown("---")
 st.markdown("<div style='text-align:center; color:gray; font-size:0.8em;'>Data: 농촌진흥청 | Powered by DuckDB & Streamlit</div>", unsafe_allow_html=True)
