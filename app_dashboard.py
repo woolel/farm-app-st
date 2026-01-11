@@ -97,7 +97,7 @@ if status != "ok":
     st.stop()
 
 # ==========================================
-# 3. 유틸리티 함수 (알고리즘 추가됨)
+# 3. 유틸리티 함수
 # ==========================================
 def format_content(text):
     if not text: return ""
@@ -107,8 +107,9 @@ def format_content(text):
 @st.cache_data(ttl=3600)
 def get_week_list(year, month):
     try:
+        # [수정 완료] r 제거 및 백슬래시 2개(\\) 사용
         sql = """
-            SELECT DISTINCT regexp_extract(title, r'\[(.*?)\]', 1) as week_range 
+            SELECT DISTINCT regexp_extract(title, '\\[(.*?)\\]', 1) as week_range 
             FROM farm_info 
             WHERE year = ? AND month = ? 
             ORDER BY week_range
@@ -164,7 +165,6 @@ def organize_items_smartly(items, target_date_obj):
             continue
             
     if not best_week:
-        # 날짜 파싱 실패 시 그냥 첫 번째 주간 선택
         best_week = list(weeks_group.keys())[0]
 
     # 3. 최적 주간의 아이템들 가져오기
@@ -184,7 +184,7 @@ def organize_items_smartly(items, target_date_obj):
         else:
             others_list.append(item)
             
-    # 최종 조합: 요약(1개) + 기상(1개) + 나머지(최대 2개) = 총 4개
+    # 최종 조합
     final_list = summary_list[:1] + weather_list[:1] + others_list
     return final_list[:4]
 
@@ -197,11 +197,12 @@ AVAILABLE_YEARS = [2023, 2024, 2025]
 if 'search_query' not in st.session_state:
     st.session_state.search_query = ""
 
+# 연도 초기값 설정 (범위 밖이면 최신 데이터 연도로 고정)
 if 'filter_year' not in st.session_state:
     if today.year in AVAILABLE_YEARS:
         st.session_state.filter_year = today.year
     else:
-        st.session_state.filter_year = AVAILABLE_YEARS[-1]
+        st.session_state.filter_year = AVAILABLE_YEARS[-1] # 2025
 
 if 'filter_month' not in st.session_state:
     st.session_state.filter_month = today.month
@@ -252,9 +253,8 @@ with st.container():
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ==========================================
-# 6. 중앙 대시보드 (지능형 정렬 적용)
+# 6. 중앙 대시보드
 # ==========================================
-# 기준 날짜 설정 (선택된 주간이 있으면 그 날짜, 없으면 오늘)
 if st.session_state.selected_week_range:
     target_date_str = st.session_state.selected_week_range.split('~')[0]
     target_date = datetime.strptime(target_date_str, "%Y-%m-%d")
@@ -267,20 +267,18 @@ else:
 
 with st.container(border=True):
     try:
-        # SQL에서 w_range(주간범위 문자열)를 함께 가져와야 함
+        # [수정 완료] SQL 쿼리 내 r 제거 및 이스케이프(\\) 적용
         if st.session_state.selected_week_range:
-            # 특정 주간 선택 시
             query_sql = """
-                SELECT year, title, content_md, tags_crop, regexp_extract(title, r'\[(.*?)\]', 1) as w_range
+                SELECT year, title, content_md, tags_crop, regexp_extract(title, '\\[(.*?)\\]', 1) as w_range
                 FROM farm_info 
                 WHERE title LIKE ?
                 ORDER BY year DESC
             """
             params = [f'%{st.session_state.selected_week_range}%']
         else:
-            # 전체 보기 시 (월 전체 데이터를 가져와서 파이썬에서 날짜별로 거름)
             query_sql = """
-                SELECT year, title, content_md, tags_crop, regexp_extract(title, r'\[(.*?)\]', 1) as w_range
+                SELECT year, title, content_md, tags_crop, regexp_extract(title, '\\[(.*?)\\]', 1) as w_range
                 FROM farm_info 
                 WHERE month = ?
                 AND content_md NOT LIKE '%목 차%'
@@ -301,22 +299,19 @@ with st.container(border=True):
             filtered_rows = rows
 
         if filtered_rows:
-            # 연도별 그룹화
             grouped_by_year = {2025: [], 2024: [], 2023: []}
             for item in filtered_rows:
                 y = item[0]
                 if y in grouped_by_year:
                     grouped_by_year[y].append(item)
             
-            # 연도별 출력
             for year in [2025, 2024, 2023]:
                 items = grouped_by_year[year]
                 
                 if items:
                     st.markdown(f"##### {material_icon('calendar_today', color='#5f6368')} {year}년 기록", unsafe_allow_html=True)
                     
-                    # [핵심] 스마트 정렬 함수 적용
-                    # target_date(오늘 또는 선택일)를 기준으로 가장 가까운 주간의 요약->기상->나머지 추출
+                    # 스마트 정렬 적용
                     display_items = organize_items_smartly(items, target_date)
                     
                     if not display_items:
@@ -326,17 +321,15 @@ with st.container(border=True):
 
                     cols = st.columns(2)
                     for idx, item in enumerate(display_items):
-                        # item structure: [year, title, content, tags, w_range]
                         yr, title, content, tags, w_range = item
                         clean_title = title.split(']')[-1].strip() if ']' in title else title
                         
-                        # 아이콘 및 스타일링
                         icon = "📄"
                         if '요약' in title or '요 약' in title:
-                            icon = "⭐" # 요약 강조
+                            icon = "⭐"
                             clean_title = f"<b>{clean_title}</b>"
                         elif '기상' in title:
-                            icon = "⛅" # 기상 강조
+                            icon = "⛅"
 
                         with cols[idx % 2]:
                             with st.popover(f"{icon} {clean_title}", use_container_width=True):
@@ -382,8 +375,7 @@ if search_btn and query_input:
                 for row in valid_results[:5]:
                     yr, mn, title, content, score = row
                     
-                    badge = "참고용"
-                    color = "#9aa0a6"
+                    badge, color = "참고용", "#9aa0a6"
                     if score >= 0.65: badge, color = "강력 추천", "#34a853"
                     elif score >= 0.50: badge, color = "관련 있음", "#f9ab00"
                     
