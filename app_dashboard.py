@@ -107,7 +107,7 @@ def format_content(text):
 @st.cache_data(ttl=3600)
 def get_week_list(year, month):
     try:
-        # [수정 완료] r 제거 및 백슬래시 2개(\\) 사용
+        # [수정] r 제거 및 이스케이프 적용
         sql = """
             SELECT DISTINCT regexp_extract(title, '\\[(.*?)\\]', 1) as week_range 
             FROM farm_info 
@@ -128,17 +128,10 @@ def get_all_categories():
         return []
 
 def organize_items_smartly(items, target_date_obj):
-    """
-    [핵심 알고리즘]
-    1. 해당 연도의 데이터 중 target_date(오늘 또는 선택일)와 가장 가까운 주간을 찾음
-    2. 그 주간의 데이터 중에서 요약(1순위) -> 기상(2순위) -> 나머지 순으로 정렬
-    """
     if not items: return []
 
-    # 1. 주간별로 그룹화
     weeks_group = {}
     for item in items:
-        # item[4] is w_range string "YYYY-MM-DD~..."
         w_range = item[4]
         if not w_range: continue
         if w_range not in weeks_group: weeks_group[w_range] = []
@@ -146,15 +139,13 @@ def organize_items_smartly(items, target_date_obj):
     
     if not weeks_group: return []
 
-    # 2. 타겟 날짜와 가장 가까운 주간 찾기
     best_week = None
     min_diff_days = 9999
     
     for w_str in weeks_group.keys():
         try:
-            start_str = w_str.split('~')[0] # "2023-01-01"
+            start_str = w_str.split('~')[0]
             w_date = datetime.strptime(start_str, "%Y-%m-%d")
-            # 연도 차이는 무시하고 월/일 차이만 비교하기 위해 연도 통일
             w_date_adj = w_date.replace(year=target_date_obj.year)
             
             diff = abs((target_date_obj - w_date_adj).days)
@@ -167,10 +158,8 @@ def organize_items_smartly(items, target_date_obj):
     if not best_week:
         best_week = list(weeks_group.keys())[0]
 
-    # 3. 최적 주간의 아이템들 가져오기
     target_items = weeks_group[best_week]
     
-    # 4. 우선순위 정렬 (요약 -> 기상 -> 나머지)
     summary_list = []
     weather_list = []
     others_list = []
@@ -184,7 +173,6 @@ def organize_items_smartly(items, target_date_obj):
         else:
             others_list.append(item)
             
-    # 최종 조합
     final_list = summary_list[:1] + weather_list[:1] + others_list
     return final_list[:4]
 
@@ -197,12 +185,11 @@ AVAILABLE_YEARS = [2023, 2024, 2025]
 if 'search_query' not in st.session_state:
     st.session_state.search_query = ""
 
-# 연도 초기값 설정 (범위 밖이면 최신 데이터 연도로 고정)
 if 'filter_year' not in st.session_state:
     if today.year in AVAILABLE_YEARS:
         st.session_state.filter_year = today.year
     else:
-        st.session_state.filter_year = AVAILABLE_YEARS[-1] # 2025
+        st.session_state.filter_year = AVAILABLE_YEARS[-1]
 
 if 'filter_month' not in st.session_state:
     st.session_state.filter_month = today.month
@@ -218,6 +205,7 @@ with st.container():
     st.markdown('<div class="filter-box">', unsafe_allow_html=True)
     f_col1, f_col2 = st.columns(2)
     
+    # [1] 아카이브 (날짜 선택)
     with f_col1:
         st.markdown(f"**{material_icon('calendar_month', color='#1a73e8')} 아카이브 (날짜 선택)**", unsafe_allow_html=True)
         c1, c2, c3 = st.columns([0.3, 0.3, 0.4])
@@ -232,21 +220,26 @@ with st.container():
             sel_month = st.selectbox("월", range(1, 13), index=st.session_state.filter_month-1, key='sel_month_key', label_visibility="collapsed")
         
         weeks_list = get_week_list(sel_year, sel_month)
-        weeks_options = ["전체 보기"] + weeks_list
+        # [수정 2] '전체 보기' -> '주차'로 변경
+        weeks_options = ["주차"] + weeks_list
         
         with c3:
             sel_week = st.selectbox("주간 선택", weeks_options, label_visibility="collapsed")
-            if sel_week == "전체 보기":
+            # [수정 2] 조건문도 '주차'로 변경
+            if sel_week == "주차":
                 st.session_state.selected_week_range = None
             else:
                 st.session_state.selected_week_range = sel_week
 
+    # [2] 작목 선택 (필터)
     with f_col2:
         st.markdown(f"**{material_icon('filter_alt', color='#ea4335')} 작목 선택 (필터)**", unsafe_allow_html=True)
         all_tags = get_all_categories()
+        # [수정 3] default 값을 all_tags로 설정하여 전체 선택 상태로 시작
         selected_crops = st.multiselect(
             "작목을 선택하세요", 
-            all_tags, 
+            all_tags,
+            default=all_tags,
             placeholder="전체 (클릭하여 작목 선택)",
             label_visibility="collapsed"
         )
@@ -263,11 +256,12 @@ if st.session_state.selected_week_range:
 else:
     target_date = datetime.now()
     dashboard_title = f"{sel_year}년 {sel_month}월 (오늘 날짜 기준 비교)"
-    st.caption(f"📌 **{target_date.month}월 {target_date.day}일** 기준, 지난 3년의 가장 유사한 시기 기록입니다.")
+    # [수정 4] 텍스트 포맷 변경: '오늘: YYYY년 M월 D일'
+    st.caption(f"📌 **오늘: {target_date.year}년 {target_date.month}월 {target_date.day}일** 기준, 지난 3년의 가장 유사한 시기 기록입니다.")
 
 with st.container(border=True):
     try:
-        # [수정 완료] SQL 쿼리 내 r 제거 및 이스케이프(\\) 적용
+        # SQL에서 w_range(주간범위 문자열)를 함께 가져옴
         if st.session_state.selected_week_range:
             query_sql = """
                 SELECT year, title, content_md, tags_crop, regexp_extract(title, '\\[(.*?)\\]', 1) as w_range
@@ -290,13 +284,17 @@ with st.container(border=True):
 
         # 작목 필터링
         filtered_rows = []
+        # selected_crops가 비어있으면(사용자가 모두 해제하면) 결과 0개가 맞음 (multiselect UX)
+        # 하지만 '전체 해제 = 전체 선택'으로 처리하고 싶다면 아래 조건문 수정 필요.
+        # 현재는 요청하신대로 default가 전체이므로, 해제하면 필터링됨.
         if selected_crops:
             for r in rows:
                 item_tags = r[3] if r[3] else []
                 if any(crop in item_tags for crop in selected_crops):
                     filtered_rows.append(r)
         else:
-            filtered_rows = rows
+            # 다 끄면 아무것도 안나오는게 기본이지만, 혹시 전체를 원하시면 filtered_rows = rows 로 변경
+            filtered_rows = [] 
 
         if filtered_rows:
             grouped_by_year = {2025: [], 2024: [], 2023: []}
@@ -311,7 +309,6 @@ with st.container(border=True):
                 if items:
                     st.markdown(f"##### {material_icon('calendar_today', color='#5f6368')} {year}년 기록", unsafe_allow_html=True)
                     
-                    # 스마트 정렬 적용
                     display_items = organize_items_smartly(items, target_date)
                     
                     if not display_items:
@@ -325,13 +322,15 @@ with st.container(border=True):
                         clean_title = title.split(']')[-1].strip() if ']' in title else title
                         
                         icon = "📄"
+                        # [수정 5] HTML 태그 제거 (st.popover 라벨은 plain text만 지원)
                         if '요약' in title or '요 약' in title:
                             icon = "⭐"
-                            clean_title = f"<b>{clean_title}</b>"
+                            # <b> 태그 제거하고 그냥 텍스트로 표시
                         elif '기상' in title:
                             icon = "⛅"
 
                         with cols[idx % 2]:
+                            # 라벨에 HTML 태그 없이 아이콘으로만 강조
                             with st.popover(f"{icon} {clean_title}", use_container_width=True):
                                 if tags:
                                     st.caption(f"태그: {', '.join(tags)}")
@@ -339,7 +338,7 @@ with st.container(border=True):
                     
                     st.divider()
         else:
-            st.info("조건에 맞는 데이터가 없습니다.")
+            st.info("조건에 맞는 데이터가 없습니다. 작목을 선택해주세요.")
 
     except Exception as e:
         st.error(f"데이터 로드 오류: {e}")
