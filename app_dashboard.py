@@ -99,14 +99,19 @@ def load_resources():
         return None, None, "file_not_found"
         
     try:
-        con = duckdb.connect('farming_granular.duckdb', read_only=True)
+        con = duckdb.connect('farming_granular.duckdb', read_only=False) # FTS 생성을 위해 Write 모드 필요할 수 있음
         con.execute("INSTALL vss; LOAD vss;")
         con.execute("INSTALL fts; LOAD fts;")
         
+        # FTS 인덱스 확인 및 생성
         schemas = con.execute("SELECT schema_name FROM duckdb_schemas;").fetchall()
         fts_status = "ok"
-        if not any('fts_main_farming' in str(row) for row in schemas):
-            fts_status = "fts_missing"
+        if not any('fts_main_farm_info' in str(row) for row in schemas):
+            try:
+                # PK(id)가 존재하므로 이를 이용해 인덱스 생성
+                con.execute("PRAGMA create_fts_index('farm_info', 'id', 'content_md', 'title', 'tags_crop');")
+            except Exception as e:
+                fts_status = "fts_missing"
             
     except Exception as e:
         return None, None, f"db_error: {e}"
@@ -116,25 +121,47 @@ def load_resources():
 @st.cache_data(ttl=3600)
 def get_monthly_trends(month, _con):
     try:
+        # 태그별 통계 (unnest 사용)
         sql = """
-            SELECT category, count(*) as cnt
-            FROM farming
+            SELECT unnest(tags_crop) as category, count(*) as cnt
+            FROM farm_info
             WHERE month = ?
             GROUP BY category
             ORDER BY cnt DESC
+            LIMIT 10
         """
-        return _con.execute(sql, [month]).fetchall()
+        rows = _con.execute(sql, [month]).fetchall()
+        if not rows:
+            return []
+        return rows
     except:
         return []
 
 @st.cache_data(ttl=3600)
 def get_week_list(year, month, _con):
-    """특정 연도/월의 주간 정보(id) 목록 조회"""
+    """특정 연도/월의 주간 정보(주차 문자열) 목록 조회"""
     try:
-        sql = "SELECT DISTINCT id FROM farming WHERE year = ? AND month = ? ORDER BY id"
-        return [row[0] for row in _con.execute(sql, [int(year), int(month)]).fetchall()]
+        # title에서 [YYYY-MM-DD~YYYY-MM-DD] 패턴 추출
+        sql = """
+            SELECT DISTINCT regexp_extract(title, '\[(.*?)\]', 1) as week_range 
+            FROM farm_info 
+            WHERE year = ? AND month = ? 
+            AND week_range IS NOT NULL
+            ORDER BY week_range
+        """
+        return [row[0] for row in _con.execute(sql, [int(year), int(month)]).fetchall() if row[0]]
     except:
         return []
+
+@st.cache_data(ttl=3600)
+def get_all_categories(_con):
+    """DB에 존재하는 모든 작목 태그 조회"""
+    try:
+        sql = "SELECT DISTINCT unnest(tags_crop) FROM farm_info ORDER BY 1"
+        rows = _con.execute(sql).fetchall()
+        return [r[0] for r in rows if r[0]]
+    except:
+        return ['벼', '밭작물', '채소', '과수', '특용작물', '축산', '양봉'] # Fallback
 
 model, con, status = load_resources()
 
@@ -308,30 +335,36 @@ title_date = today.strftime("%m월 %d일")
 st.markdown(f"### {material_icon('calendar_month', size=28, color='#1a73e8')} {title_date}의 과거 농사 기록 (최근 3년)", unsafe_allow_html=True)
 
 # 과거 기록 데이터 조회 및 섹션 구성
+# 과거 기록 데이터 조회 및 섹션 구성
 with st.container(border=True):
+    # Farm Info 테이블 조회 (content_md, tags_crop 등)
     history_sql = """
-        SELECT id, year, category, content 
-        FROM farming 
+        SELECT regexp_extract(title, '\[(.*?)\]', 1) as week_range, year, tags_crop, content_md, title 
+        FROM farm_info 
         WHERE month = ? 
-        AND content NOT LIKE '%목 차%' 
-        AND category != '목차'
-        ORDER BY year DESC, category
+        AND content_md NOT LIKE '%목 차%' 
+        ORDER BY year DESC, week_range DESC
     """
     try:
-        # 아카이브로 특정 주간을 선택한 경우 해당 데이터만 조회, 아니면 오늘 날짜 기준
+        # 아카이브로 특정 주간을 선택한 경우 해당 데이터만 조회
         if st.session_state.selected_week_id:
-            rows = con.execute("SELECT id, year, category, content FROM farming WHERE id = ? AND category != '목차'", [st.session_state.selected_week_id]).fetchall()
+            # selected_week_id는 '2023-01-01~2023-01-07' 형태
+            rows = con.execute("""
+                SELECT regexp_extract(title, '\[(.*?)\]', 1) as week_range, year, tags_crop, content_md, title 
+                FROM farm_info 
+                WHERE title LIKE ?
+            """, [f'%{st.session_state.selected_week_id}%']).fetchall()
             valid_items = rows
         else:
             rows = con.execute(history_sql, [current_month]).fetchall()
             valid_items = []
             
-            # [수정] 내용 기반 중복 제거(seen_contents) 삭제 -> 연도별 데이터 독립성 보장
             for r in rows:
-                rid, ryear, rcat, rcontent = r
+                w_range, ryear, rtags, rcontent, rtitle = r
+                if not w_range: continue
                 
                 try:
-                    start_str, end_str = rid.split('~')
+                    start_str, end_str = w_range.split('~')
                     # 과거 연도의 날짜를 현재 연도로 치환하여 비교
                     s_date = datetime.strptime(start_str, "%Y-%m-%d").replace(year=today.year)
                     e_date = datetime.strptime(end_str, "%Y-%m-%d").replace(year=today.year)
@@ -362,19 +395,29 @@ with st.container(border=True):
                 # 내용 2단 2행 (최대 4개) 그리드 배치
                 cols = st.columns(2)
                 
-                # [수정] 정렬 로직 강화: 공백 제거 후 비교
+                # 정렬: 태그 있는것 우선
                 sorted_items = sorted(grouped[y], key=lambda x: (
-                    0 if x[2].strip() == '요약' else 1, 
-                    x[2].strip()
+                    0 if x[2] and len(x[2])>0 else 1, 
+                    x[4] # title
                 ))
                 
                 for idx, item in enumerate(sorted_items[:4]): 
-                    cat, content = item[2], item[3]
-                    cat_prefix = f"[{cat}] " if cat and cat != 'content' else ""
-                    short_content = content.split('\n')[0][:30] + "..."
+                    w_range, ryear, rtags, rcontent, rtitle = item
+                    
+                    # 태그 표시 (최대 2개)
+                    cat_display = ""
+                    if rtags:
+                        cat_display = " ".join([f"[{t}]" for t in rtags[:2]]) + " "
+                    elif "기상" in rtitle: # 태그 없지만 기상 관련이면
+                        cat_display = "[기상] "
+                    
+                    # 제목에서 날짜 제거하고 깨끗하게 보여주기
+                    clean_title = rtitle.split(']')[-1].strip() if ']' in rtitle else rtitle
+                    display_text = f"{cat_display}{clean_title}"
+                    
                     with cols[idx % 2]:
-                        with st.popover(f"{cat_prefix}{short_content}", use_container_width=True):
-                            st.markdown(format_content(content), unsafe_allow_html=True)
+                        with st.popover(display_text, use_container_width=True):
+                            st.markdown(format_content(rcontent), unsafe_allow_html=True)
                 st.divider()
         else:
             st.info("해당 기간의 과거 정보가 없습니다.")
@@ -389,11 +432,13 @@ st.divider()
 bar1, bar2, bar3 = st.columns([0.15, 0.7, 0.15])
 
 with bar1:
+    # DB에서 동적으로 태그 가져오기
+    available_tags = get_all_categories(con)
     with st.popover("🔍 작목 선택", use_container_width=True):
         selected_cats = st.multiselect(
             "필터링할 작목:",
-            ['기상', '벼', '밭작물', '채소', '과수', '특용작물', '축산', '양봉'],
-            default=['기상', '과수']
+            available_tags,
+            default=available_tags[:2] if available_tags else []
         )
 
 with bar2:
@@ -450,8 +495,20 @@ else:
 if search_btn and query_input:
     cat_filter_sql = ""
     if selected_cats:
-        cat_list_str = "', '".join(selected_cats)
-        cat_filter_sql = f"AND category IN ('{cat_list_str}')"
+        # list_has_any (하나라도 포함되면 매칭)
+        # duckdb list query: list_contains(tags_crop, 'ITEM') ... OR ...
+        # 간단하게: array filtering
+        # 그러나 SQL 파라미터 바인딩이 복잡하므로 문자열 포맷팅 사용 (주의)
+        # category IN (...) 대신 list logic
+        # OR logic: list_has_any(tags_crop, [selected...]) -> list_has_any는 최신 duckdb 필요할수도
+        # 안전하게 unnest 후 IN
+        pass 
+        
+        # NOTE: DuckDB Python client passing list for IN clause is tricky with arrays
+        # Constructing dynamic WHERE clause
+        # WHERE len(list_filter(tags_crop, x -> x IN (...))) > 0
+        cat_list_str = ", ".join([f"'{c}'" for c in selected_cats])
+        cat_filter_sql = f"AND len(list_filter(tags_crop, x -> x IN ({cat_list_str}))) > 0"
 
     with st.spinner("AI가 문서를 분석 중입니다..."):
         # 검색어 정규화 (명사/동사/숫자 추출)
@@ -459,21 +516,22 @@ if search_btn and query_input:
         query_vector = model.encode(clean_query).tolist()
         
         # 하이브리드 검색 SQL (Semantic 1.5배 + FTS 0.5배 가중치 결합)
+        # farm_info 테이블 사용
         search_sql = f"""
         SELECT 
             vector_score,
             fts_score,
-            category, year, month, content
+            tags_crop, year, month, content_md, title
         FROM (
             SELECT 
                 array_cosine_similarity(embedding, ?::FLOAT[768]) AS vector_score,
-                fts_main_farming.match_bm25(pk, ?) AS fts_score,
-                category, year, month, content
-            FROM farming
+                fts_main_farm_info.match_bm25(id, ?) AS fts_score,
+                tags_crop, year, month, content_md, title
+            FROM farm_info
             WHERE 1=1 {cat_filter_sql}
         ) sub
-        WHERE vector_score > 0.40 -- 최소 관련성 필터 완화 (전처리 후엔 점수 편차가 커질 수 있음)
-        ORDER BY (vector_score * 1.5 + fts_score * 0.5) DESC -- 가중치 기반 하이브리드 정렬
+        WHERE vector_score > 0.40
+        ORDER BY (vector_score * 1.5 + fts_score * 0.5) DESC
         LIMIT 5
         """
         
@@ -490,7 +548,7 @@ if search_btn and query_input:
                 st.success(f"총 {len(results)}건의 관련 정보를 찾았습니다.")
                 
                 for row in results:
-                    v_score, f_score, cat, yr, mn, body = row
+                    v_score, f_score, tags, yr, mn, body, rtitle = row
                     
                     # [핵심 수정] NoneType 에러 방지용 안전장치
                     if v_score is None: v_score = 0.0
@@ -500,8 +558,12 @@ if search_btn and query_input:
                     badge_color = "#34a853" if v_score > 0.65 else "#fbbc04"
                     match_type = "AI+키워드" if f_score > 0 else "AI추론"
                     
-                    # 'content' 카테고리는 표시하지 않음
-                    cat_display = f"<b>[{cat}]</b> " if cat and cat != 'content' else ""
+                    # 태그 표시
+                    cat_display = ""
+                    if tags:
+                        cat_display = " ".join([f"<b>[{t}]</b>" for t in tags[:3]]) + " "
+                    elif "기상" in rtitle:
+                        cat_display = "<b>[기상]</b> "
 
                     with st.container(border=True):
                         st.markdown(f"""
