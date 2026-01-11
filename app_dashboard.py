@@ -395,25 +395,20 @@ with st.container(border=True):
                 # 내용 2단 2행 (최대 4개) 그리드 배치
                 cols = st.columns(2)
                 
-                # 정렬: 태그 있는것 우선
+                # 정렬: '요약' 또는 '요 약'이 포함된 항목을 최상단으로
                 sorted_items = sorted(grouped[y], key=lambda x: (
-                    0 if x[2] and len(x[2])>0 else 1, 
+                    0 if '요약' in x[4] or '요 약' in x[4] else 1, 
                     x[4] # title
                 ))
                 
                 for idx, item in enumerate(sorted_items[:4]): 
                     w_range, ryear, rtags, rcontent, rtitle = item
                     
-                    # 태그 표시 (최대 2개)
-                    cat_display = ""
-                    if rtags:
-                        cat_display = " ".join([f"[{t}]" for t in rtags[:2]]) + " "
-                    elif "기상" in rtitle: # 태그 없지만 기상 관련이면
-                        cat_display = "[기상] "
-                    
-                    # 제목에서 날짜 제거하고 깨끗하게 보여주기
+                    # 제목에서 날짜([]) 제거하고 깨끗하게 보여주기
                     clean_title = rtitle.split(']')[-1].strip() if ']' in rtitle else rtitle
-                    display_text = f"{cat_display}{clean_title}"
+                    
+                    # 태그 표시는 제거 (사용자 요청)
+                    display_text = clean_title
                     
                     with cols[idx % 2]:
                         with st.popover(display_text, use_container_width=True):
@@ -511,12 +506,16 @@ if search_btn and query_input:
         cat_filter_sql = f"AND len(list_filter(tags_crop, x -> x IN ({cat_list_str}))) > 0"
 
     with st.spinner("AI가 문서를 분석 중입니다..."):
-        # 검색어 정규화 (명사/동사/숫자 추출)
+        # 1. 검색어 정규화 (FTS용: 명사/동사/숫자만 추출)
         clean_query = extract_keywords(query_input)
-        query_vector = model.encode(clean_query).tolist()
+        
+        # 2. 임베딩 생성 (Vector용: 문맥 유지를 위해 원본 문장 사용)
+        # SBERT 모델은 문장 전체의 의미를 파악하는에 유리함
+        query_vector = model.encode(query_input).tolist()
         
         # 하이브리드 검색 SQL (Semantic 1.5배 + FTS 0.5배 가중치 결합)
         # farm_info 테이블 사용
+        # [수정] '요약'이 포함된 제목은 상세 정보 파악에 방해되므로 제외
         search_sql = f"""
         SELECT 
             vector_score,
@@ -528,7 +527,10 @@ if search_btn and query_input:
                 fts_main_farm_info.match_bm25(id, ?) AS fts_score,
                 tags_crop, year, month, content_md, title
             FROM farm_info
-            WHERE 1=1 {cat_filter_sql}
+            WHERE 1=1 
+                {cat_filter_sql} 
+                AND title NOT LIKE '%요약%' 
+                AND title NOT LIKE '%요 약%'
         ) sub
         WHERE vector_score > 0.40
         ORDER BY (vector_score * 1.5 + fts_score * 0.5) DESC
@@ -536,7 +538,8 @@ if search_btn and query_input:
         """
         
         try:
-            results = con.execute(search_sql, [query_vector, query_input]).fetchall()
+            # FTS에는 키워드만 전달하여 정확도 향상
+            results = con.execute(search_sql, [query_vector, clean_query]).fetchall()
             
             if not results:
                 st.markdown(f"""

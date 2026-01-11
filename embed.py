@@ -1,212 +1,197 @@
+import re
 import duckdb
-import os
-import json
-import pandas as pd
+import torch
+import gc  # [추가] 메모리 청소용
 from sentence_transformers import SentenceTransformer
-from kiwipiepy import Kiwi
+from tqdm import tqdm
+from typing import Dict, List, Any, Tuple
 
-# ==========================================
-# 1. 설정 (파일 경로 및 모델)
-# ==========================================
-INPUT_FILE = 'optimized_farming_data_v2.jsonl'  # 원본 데이터
-DB_PATH = 'farming_granular.duckdb'             # 생성될 DB 이름
-MODEL_NAME = 'jhgan/ko-sroberta-multitask'      # 한국어 특화 임베딩 모델
-VECTOR_DIM = 768                                # 모델의 벡터 차원 수
+# [설정 수정됨]
+MODEL_NAME = 'jhgan/ko-sroberta-multitask'
+DB_PATH = "farming_granular.duckdb"
 
-# ==========================================
-# 1.5. Kiwi 형태소 분석기 및 전처리 함수
-# ==========================================
-kiwi = Kiwi()
+# 8GB 램 생존 설정
+BATCH_SIZE = 32           # [중요] 한 번에 하나씩 처리 (RAM 폭증 방지)
+DB_INSERT_BATCH = 50     # DB 저장은 50개씩 모아서
+MAX_TEXT_LENGTH = 512   # [타협] 2048 -> 1536 (약 25% 부하 감소, 여전히 충분히 김)
 
-def extract_keywords(text):
-    """명사(N), 동사/형용사(V), 수칭/수치(SN)만 추출하여 텍스트 정규화"""
-    if not text: return ""
-    result = kiwi.tokenize(text)
-    # N(명사), V(동사/형용사 어근), SN(숫자/수량) 추출
-    keywords = [t.form for t in result if t.tag.startswith('N') or t.tag.startswith('V') or t.tag == 'SN']
-    return " ".join(keywords) if keywords else text
+# [태그 사전]
+TAG_SETS = {
+    "crop": ["벼", "보리", "밀", "콩", "옥수수", "감자", "고구마", "고추", "배추", "무", "마늘", "양파", "오이", "토마토", "딸기", "수박", "복숭아", "사과", "배", "포도", "감", "인삼", "오미자", "깨", "소", "돼지", "닭", "꿀벌"],
+    "task": ["파종", "육묘", "정식", "이앙", "물관리", "비료", "제초", "전정", "적과", "방제", "수확", "건조", "저장", "종자신청", "방역", "농기계점검", "요약"],
+    "env": ["기상전망", "태풍", "장마", "가뭄", "폭염", "동해", "냉해", "집중호우", "일조량", "저수율", "시설하우스", "화재예방", "월동관리"],
+    "pest": ["탄저병", "도열병", "흰가루병", "과수화상병", "진딧물", "응애", "총채벌레", "멸구", "구제역", "AI", "ASF"],
+    "admin": ["PLS", "비료", "보급종", "재해보험", "시범사업", "농약"]
+}
 
-# ==========================================
-# 2. AI 모델 로드
-# ==========================================
-print(f"🚀 [1/5] AI 모델 로드 중 ({MODEL_NAME})...")
-print("   (처음 실행 시 모델 다운로드에 시간이 소요될 수 있습니다. 잠시만 기다려주세요.)")
-model = SentenceTransformer(MODEL_NAME)
+# [정규식 컴파일]
+COMPILED_PATTERNS = {}
+PARTICLES = "(?:은|는|이|가|을|를|의|와|과|도|로|에|서)?"
 
-# ==========================================
-# 3. DuckDB 초기화 및 테이블 생성
-# ==========================================
-print(f"🚀 [2/5] 데이터베이스 초기화 중...")
+for category, tags in TAG_SETS.items():
+    one_char_tags = [re.escape(tag) for tag in tags if len(tag) == 1]
+    multi_char_tags = [re.escape(tag) for tag in tags if len(tag) > 1]
+    patterns = []
+    if one_char_tags:
+        patterns.append(f"(?<![가-힣])((?:{'|'.join(one_char_tags)})){PARTICLES}(?![가-힣])")
+    if multi_char_tags:
+        patterns.append(f"((?:{'|'.join(multi_char_tags)}))")
+    if patterns:
+        COMPILED_PATTERNS[category] = re.compile("|".join(patterns))
+    else:
+        COMPILED_PATTERNS[category] = None
 
-# 기존 DB 파일이 있다면 삭제 (깨끗한 상태로 시작)
-if os.path.exists(DB_PATH):
+def init_db(con: duckdb.DuckDBPyConnection, embedding_dim: int) -> None:
     try:
-        os.remove(DB_PATH)
-    except PermissionError:
-        print("❌ 오류: DB 파일이 열려있어 삭제할 수 없습니다. DB 연결을 해제해주세요.")
-        exit()
+        con.execute("INSTALL vss; LOAD vss;") 
+    except Exception as e:
+        print(f"⚠️ VSS 확장 로드 경고: {e}")
+    con.execute("CREATE SEQUENCE IF NOT EXISTS seq_id START 1;")
+    con.execute(f"""
+        CREATE TABLE IF NOT EXISTS farm_info (
+            id INTEGER PRIMARY KEY DEFAULT nextval('seq_id'),
+            year INTEGER, month INTEGER,
+            title TEXT,
+            tags_crop VARCHAR[], tags_task VARCHAR[], tags_env VARCHAR[],
+            tags_pest VARCHAR[], tags_admin VARCHAR[],
+            content_md TEXT,
+            embedding FLOAT[{embedding_dim}]
+        )
+    """)
 
-con = duckdb.connect(DB_PATH)
+def extract_smart_tags_optimized(text: str) -> Dict[str, List[str]]:
+    extracted = {}
+    for category, pattern in COMPILED_PATTERNS.items():
+        if pattern:
+            matches = pattern.findall(text)
+            cleaned_matches = {next(filter(None, match), '') for match in matches if match}
+            if '' in cleaned_matches: cleaned_matches.remove('')
+            extracted[category] = sorted(list(cleaned_matches))
+        else:
+            extracted[category] = []
+    return extracted
 
-# 벡터 검색 확장 기능(VSS) 로드
-try:
-    con.execute("INSTALL vss; LOAD vss;")
-except Exception as e:
-    print(f"⚠️ 확장 로드 경고 (이미 설치된 경우 무시): {e}")
+def clean_markdown(text: str) -> str:
+    text = re.sub(r'\[.*?\]\(.*?\)', ' ', text)
+    text = re.sub(r'[\|\-]', ' ', text) # 표 기호 제거
+    text = re.sub(r'[#*`>]', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
-# 테이블 스키마 정의 (카테고리별로 쪼개진 구조)
-con.execute(f"""
-    CREATE TABLE farming (
-        pk BIGINT PRIMARY KEY, -- 고유 프라이머리 키 (FTS 필수)
-        id TEXT,
-        year TEXT,
-        month INTEGER,
-        category TEXT,     -- '양봉', '기상', '벼' 등 구분
-        content TEXT,      -- 실제 내용 (기호, 특수문자 보존됨)
-        embedding FLOAT[{VECTOR_DIM}]
+def flush_buffer_to_db(con: duckdb.DuckDBPyConnection, buffer: List[Tuple]) -> None:
+    if not buffer: return
+    try:
+        con.executemany("""
+            INSERT INTO farm_info (year, month, title, tags_crop, tags_task, tags_env, tags_pest, tags_admin, content_md, embedding)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, buffer)
+    except duckdb.Error as e:
+        print(f"❌ DB 저장 중 오류 발생: {e}")
+
+def build_database(md_file_path: str):
+    print("📥 모델 로딩 중... (BGE-M3)")
+    model = SentenceTransformer(MODEL_NAME, device='cpu')
+    
+    print("⚡ 모델 양자화 적용 중...")
+    model = torch.quantization.quantize_dynamic(
+        model, {torch.nn.Linear}, dtype=torch.qint8
     )
-""")
-
-# ==========================================
-# 4. 데이터 읽기 및 전처리 (Flattening)
-# ==========================================
-print(f"🚀 [3/5] JSONL 파일 읽기 및 데이터 세분화...")
-
-processed_rows = []
-texts_to_embed = []
-
-try:
-    with open(INPUT_FILE, 'r', encoding='utf-8') as f:
-        for line_num, line in enumerate(f):
-            if not line.strip(): continue
-            
-            entry = json.loads(line)
-            
-            # 메타데이터 추출 (공통)
-            week_id = entry.get('id')
-            year = entry.get('year')
-            month = entry.get('month')
-            
-            # [유형 1] 명시적 스키마: {"category": "벼", "content": "..."} (최적화된 형식)
-            if 'category' in entry and 'content' in entry:
-                cat = entry['category']
-                content = entry['content']
-                if content and isinstance(content, str) and len(content.strip()) >= 5:
-                    processed_rows.append({
-                        "id": week_id,
-                        "year": year,
-                        "month": month,
-                        "category": cat,
-                        "content": content.strip()
-                    })
-            
-            # [유형 2] 동적 스키마: {"벼": "...", "기상": "..."} (기존 호환성)
-            else:
-                target_dict = entry.get('content', entry) if isinstance(entry.get('content'), dict) else entry
-                
-                for key, val in target_dict.items():
-                    # 메타데이터 키는 건너뜀
-                    if key in ['id', 'year', 'month', 'week_range', 'start_date', 'end_date', 'category']:
-                        continue
-                    
-                    if not val or not isinstance(val, str) or len(val.strip()) < 5:
-                        continue
-
-                    processed_rows.append({
-                        "id": week_id,
-                        "year": year,
-                        "month": month,
-                        "category": key,
-                        "content": val.strip()
-                    })
-
-except FileNotFoundError:
-    print(f"❌ 오류: 입력 파일({INPUT_FILE})을 찾을 수 없습니다.")
-    exit()
-
-print(f"   -> 총 {len(processed_rows)}개의 세부 데이터 분석 완료.")
-
-# ==========================================
-# 4.5. 키워드 추출 (안정적인 tokenize 방식)
-# ==========================================
-if processed_rows:
-    print(f"🚀 [3.5/5] Kiwi 형태소 분석기 가동 중 (키워드 추출)...")
     
-    keyword_texts = []
-    total = len(processed_rows)
+    embedding_dimension = model.get_sentence_embedding_dimension()
+    print(f"✅ 모델 로딩 완료 (차원: {embedding_dimension})")
+
+    con = duckdb.connect(DB_PATH)
+    init_db(con, embedding_dimension)
+
+    try:
+        with open(md_file_path, 'r', encoding='utf-8') as f:
+            data = f.read()
+    except FileNotFoundError:
+        print(f"❌ 파일을 찾을 수 없습니다: {md_file_path}")
+        return
+
+    raw_sections = re.split(r'\n#\s*(?=\[)', data)
     
-    for i, row in enumerate(processed_rows):
-        # N(명사), V(동사/형용사 어근), SN(숫자/수량) 추출
-        result = kiwi.tokenize(row['content'])
-        keywords = [t.form for t in result if t.tag.startswith('N') or t.tag.startswith('V') or t.tag == 'SN']
-        keyword_texts.append(" ".join(keywords) if keywords else row['content'])
+    buffer_rows = []
+    batch_texts = []
+    batch_meta = []
+    
+    print("🔄 데이터 처리 및 임베딩 시작 (안전 모드)...")
+    
+    for section in tqdm(raw_sections):
+        if not section.strip(): continue
         
-        # 500개 단위로 진행 상황 표시
-        if (i + 1) % 500 == 0 or (i + 1) == total:
-            print(f"   -> 키워드 추출 진행 중: {i + 1}/{total} ({(i + 1)/total*100:.1f}%)")
+        lines = section.strip().split('\n')
+        header = lines[0]
+        if not header.startswith('#'): header = '# ' + header
+        body = "\n".join(lines[1:])
 
-    # 임베딩용 텍스트 최종 생성
-    for i, row in enumerate(processed_rows):
-        cat = row['category']
-        embedding_text = f"{cat}: {keyword_texts[i]}"
-        texts_to_embed.append(embedding_text)
+        if "목 차" in header: continue
+        
+        date_match = re.search(r'\[(\d{4})-(\d{2})', header)
+        if not date_match: continue
+        year, month = int(date_match.group(1)), int(date_match.group(2))
+        
+        clean_body = clean_markdown(body)
+        full_text = (clean_markdown(header) + ". " + clean_body)[:MAX_TEXT_LENGTH]
+        
+        search_range = header + " " + body[:1000]
+        tags = extract_smart_tags_optimized(search_range)
+        
+        batch_texts.append(full_text)
+        batch_meta.append({
+            'year': year, 'month': month, 'title': header,
+            'tags': tags, 'content': body
+        })
+        
+        # BATCH_SIZE = 1 이므로 매번 실행됨
+        if len(batch_texts) >= BATCH_SIZE:
+            try:
+                embeddings = model.encode(batch_texts, show_progress_bar=False, batch_size=BATCH_SIZE)
+                for meta, emb in zip(batch_meta, embeddings):
+                    buffer_rows.append((
+                        meta['year'], meta['month'], meta['title'],
+                        meta['tags']['crop'], meta['tags']['task'], meta['tags']['env'],
+                        meta['tags']['pest'], meta['tags']['admin'],
+                        meta['content'], emb.tolist()
+                    ))
+            except Exception as e:
+                print(f"⚠️ 임베딩 오류: {e}")
+            finally:
+                batch_texts = []
+                batch_meta = []
+        
+        if len(buffer_rows) >= DB_INSERT_BATCH:
+            flush_buffer_to_db(con, buffer_rows)
+            buffer_rows = []
+            
+        # [중요] 반복마다 메모리 청소
+        gc.collect()
 
-# ==========================================
-# 5. 임베딩 생성 및 DB 저장 (Pandas 고속 모드)
-# ==========================================
-if texts_to_embed:
-    print(f"🚀 [4/5] 임베딩 생성 및 고속 저장 시작 ({len(texts_to_embed)}건)...")
-    
-    # 1) 임베딩 생성 (Batch Processing)
-    vectors = model.encode(texts_to_embed, batch_size=64, show_progress_bar=True, normalize_embeddings=True)
-    
-    # 2) Pandas DataFrame 생성 (병목 해결의 핵심)
-    df = pd.DataFrame(processed_rows)
-    df['embedding'] = list(vectors) # 벡터 컬럼 추가
-    
-    # 3) DuckDB에 통째로 입력 (SQL Injection 방지 및 속도 최적화)
-    # df의 컬럼 순서가 테이블과 다를 수 있으므로 명시적으로 매핑하거나 순서를 맞춤
-    # 여기서는 DataFrame 키 순서와 테이블 정의가 거의 같으므로 바로 삽입 시도
-    # 안전하게 컬럼 순서 재배열:
-    # pk 고유값 할당 및 컬럼 순서 재배열
-    df['pk'] = range(len(df))
-    df = df[['pk', 'id', 'year', 'month', 'category', 'content', 'embedding']]
-    
-    # 3) DuckDB에 통째로 입력
-    print("   -> DB에 데이터 입력 중 (Bulk Insert)...")
-    con.execute("INSERT INTO farming SELECT * FROM df")
-    
-    # 4) 인덱스 생성
-    # [극대화 1] HNSW 파라미터 튜닝 (정밀도 향상)
-    # M: 클수록 정밀하지만 메모리 사용량 증가 (기본 16, 추천 32)
-    # ef_construction: 인덱스 생성 시 탐색 범위 (기본 100, 추천 200)
-    print("🚀 [5/5] 검색 최적화 인덱스 생성 중...")
+    if batch_texts:
+        embeddings = model.encode(batch_texts, show_progress_bar=False, batch_size=BATCH_SIZE)
+        for meta, emb in zip(batch_meta, embeddings):
+            buffer_rows.append((
+                meta['year'], meta['month'], meta['title'],
+                meta['tags']['crop'], meta['tags']['task'], meta['tags']['env'],
+                meta['tags']['pest'], meta['tags']['admin'],
+                meta['content'], emb.tolist()
+            ))
+
+    if buffer_rows:
+        flush_buffer_to_db(con, buffer_rows)
+
+    print("⏳ VSS 인덱스 생성 중... (HNSW)")
     try:
-        print("   -> 벡터 인덱스(HNSW) 생성 (M=32, ef_c=200)...")
+        # [✅ 핵심 수정] 디스크 저장 허용 옵션 켜기
         con.execute("SET hnsw_enable_experimental_persistence = true;")
-        con.execute("CREATE INDEX idx_vector ON farming USING HNSW (embedding) WITH (M=32, ef_construction=200);")
+        
+        con.execute("CREATE INDEX IF NOT EXISTS vss_idx ON farm_info USING HNSW (embedding);")
+        print(f"🚀 성공: {DB_PATH} 생성 완료!")
     except Exception as e:
-        print(f"⚠️ 벡터 인덱스 생성 경고: {e}")
+        print(f"❌ 인덱스 생성 실패: {e}")
 
-    # [극대화 2] 전문 검색(FTS) 인덱스 추가 (키워드 매칭 보완)
-    print("   -> 전문 검색(FTS) 인덱스 구축 중...")
-    try:
-        con.execute("INSTALL fts; LOAD fts;")
-        # pk를 식별자로 사용하여 FTS 인덱스 생성
-        con.execute("PRAGMA create_fts_index('farming', 'pk', 'content', 'category');")
-        print("   ✅ FTS 인덱스 생성 완료")
-    except Exception as e:
-        print(f"⚠️ FTS 인덱스 생성 경고: {e}")
+    con.close()
 
-else:
-    print("⚠️ 처리할 데이터가 없습니다.")
-
-# ==========================================
-# 6. 마무리
-# ==========================================
-con.execute("CHECKPOINT;") # 모든 변경사항을 디스크에 강제 기록
-con.close()
-print("="*50)
-print(f"✅ 모든 작업이 완료되었습니다!")
-print(f"📂 생성된 파일: {os.path.abspath(DB_PATH)}")
-print("="*50)
+if __name__ == "__main__":
+    build_database("weekly.md")
