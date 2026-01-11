@@ -107,7 +107,6 @@ def format_content(text):
 @st.cache_data(ttl=3600)
 def get_week_list(year, month):
     try:
-        # [수정] r 제거 및 이스케이프 적용
         sql = """
             SELECT DISTINCT regexp_extract(title, '\\[(.*?)\\]', 1) as week_range 
             FROM farm_info 
@@ -220,27 +219,25 @@ with st.container():
             sel_month = st.selectbox("월", range(1, 13), index=st.session_state.filter_month-1, key='sel_month_key', label_visibility="collapsed")
         
         weeks_list = get_week_list(sel_year, sel_month)
-        # [수정 2] '전체 보기' -> '주차'로 변경
         weeks_options = ["주차"] + weeks_list
         
         with c3:
             sel_week = st.selectbox("주간 선택", weeks_options, label_visibility="collapsed")
-            # [수정 2] 조건문도 '주차'로 변경
             if sel_week == "주차":
                 st.session_state.selected_week_range = None
             else:
                 st.session_state.selected_week_range = sel_week
 
-    # [2] 작목 선택 (필터)
+    # [2] 작목 선택 (필터) - 수정됨
     with f_col2:
         st.markdown(f"**{material_icon('filter_alt', color='#ea4335')} 작목 선택 (필터)**", unsafe_allow_html=True)
         all_tags = get_all_categories()
-        # [수정 3] default 값을 all_tags로 설정하여 전체 선택 상태로 시작
+        # [수정] default를 비워두어 깔끔하게 보이게 함 (Logic에서 비어있으면 전체로 처리)
         selected_crops = st.multiselect(
             "작목을 선택하세요", 
             all_tags,
-            default=all_tags,
-            placeholder="전체 (클릭하여 작목 선택)",
+            default=[], # 초기 상태 비움
+            placeholder="전체 (특정 작목을 보려면 클릭하세요)", # 안내 문구 변경
             label_visibility="collapsed"
         )
     st.markdown('</div>', unsafe_allow_html=True)
@@ -256,12 +253,10 @@ if st.session_state.selected_week_range:
 else:
     target_date = datetime.now()
     dashboard_title = f"{sel_year}년 {sel_month}월 (오늘 날짜 기준 비교)"
-    # [수정 4] 텍스트 포맷 변경: '오늘: YYYY년 M월 D일'
     st.caption(f"📌 **오늘: {target_date.year}년 {target_date.month}월 {target_date.day}일** 기준, 지난 3년의 가장 유사한 시기 기록입니다.")
 
 with st.container(border=True):
     try:
-        # SQL에서 w_range(주간범위 문자열)를 함께 가져옴
         if st.session_state.selected_week_range:
             query_sql = """
                 SELECT year, title, content_md, tags_crop, regexp_extract(title, '\\[(.*?)\\]', 1) as w_range
@@ -282,19 +277,18 @@ with st.container(border=True):
 
         rows = con.execute(query_sql, params).fetchall()
 
-        # 작목 필터링
+        # [수정] 작목 필터링 로직 변경
         filtered_rows = []
-        # selected_crops가 비어있으면(사용자가 모두 해제하면) 결과 0개가 맞음 (multiselect UX)
-        # 하지만 '전체 해제 = 전체 선택'으로 처리하고 싶다면 아래 조건문 수정 필요.
-        # 현재는 요청하신대로 default가 전체이므로, 해제하면 필터링됨.
+        
+        # 사용자가 작목을 하나라도 선택했다면 -> 그 작목들만 필터링
         if selected_crops:
             for r in rows:
                 item_tags = r[3] if r[3] else []
                 if any(crop in item_tags for crop in selected_crops):
                     filtered_rows.append(r)
+        # 선택하지 않았다면(비어있으면) -> 전체 데이터 표시 (All)
         else:
-            # 다 끄면 아무것도 안나오는게 기본이지만, 혹시 전체를 원하시면 filtered_rows = rows 로 변경
-            filtered_rows = [] 
+            filtered_rows = rows
 
         if filtered_rows:
             grouped_by_year = {2025: [], 2024: [], 2023: []}
@@ -322,15 +316,13 @@ with st.container(border=True):
                         clean_title = title.split(']')[-1].strip() if ']' in title else title
                         
                         icon = "📄"
-                        # [수정 5] HTML 태그 제거 (st.popover 라벨은 plain text만 지원)
                         if '요약' in title or '요 약' in title:
                             icon = "⭐"
-                            # <b> 태그 제거하고 그냥 텍스트로 표시
+                            clean_title = f"<b>{clean_title}</b>"
                         elif '기상' in title:
                             icon = "⛅"
 
                         with cols[idx % 2]:
-                            # 라벨에 HTML 태그 없이 아이콘으로만 강조
                             with st.popover(f"{icon} {clean_title}", use_container_width=True):
                                 if tags:
                                     st.caption(f"태그: {', '.join(tags)}")
@@ -338,7 +330,7 @@ with st.container(border=True):
                     
                     st.divider()
         else:
-            st.info("조건에 맞는 데이터가 없습니다. 작목을 선택해주세요.")
+            st.info("조건에 맞는 데이터가 없습니다. 작목 필터를 변경해보세요.")
 
     except Exception as e:
         st.error(f"데이터 로드 오류: {e}")
