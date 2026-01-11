@@ -23,11 +23,9 @@ st.markdown("""
         font-family: "Pretendard", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif !important;
     }
     
-    /* 폰트 및 줄간격 */
     .big-font { font-size:18px !important; }
     .stExpander p { font-size: 16px; line-height: 1.6; }
     
-    /* 하이라이트 스타일 */
     .highlight { 
         background-color: #e8f0fe; 
         padding: 2px 4px; 
@@ -36,22 +34,19 @@ st.markdown("""
         color: #1a73e8;
     }
     
-    /* 아이콘 스타일 */
     .material-icon {
         vertical-align: middle;
         margin-right: 4px;
         line-height: 1;
     }
     
-    /* 메인 컨테이너 폭 조정 */
     .block-container {
         max-width: 900px;
         padding-top: 2rem;
-        padding-bottom: 5rem; /* 하단 검색창 공간 확보 */
+        padding-bottom: 5rem;
         margin: 0 auto;
     }
     
-    /* 뱃지 스타일 */
     .score-badge {
         padding: 4px 8px;
         border-radius: 12px;
@@ -60,7 +55,6 @@ st.markdown("""
         font-size: 0.8em;
     }
 
-    /* 상단 필터 박스 스타일 */
     .filter-box {
         background-color: #f8f9fa;
         padding: 15px;
@@ -113,8 +107,9 @@ def format_content(text):
 @st.cache_data(ttl=3600)
 def get_week_list(year, month):
     try:
+        # [수정] 정규식 패턴 앞에 r을 붙여 SyntaxWarning 해결
         sql = """
-            SELECT DISTINCT regexp_extract(title, '\[(.*?)\]', 1) as week_range 
+            SELECT DISTINCT regexp_extract(title, r'\[(.*?)\]', 1) as week_range 
             FROM farm_info 
             WHERE year = ? AND month = ? 
             ORDER BY week_range
@@ -133,21 +128,28 @@ def get_all_categories():
         return []
 
 # ==========================================
-# 4. 상태 관리
+# 4. 상태 관리 (수정됨)
 # ==========================================
 today = datetime.now()
+AVAILABLE_YEARS = [2023, 2024, 2025] # 데이터가 있는 연도 목록
+
 if 'search_query' not in st.session_state:
     st.session_state.search_query = ""
-# 아카이브 필터 상태
+
+# [수정] 현재 연도가 데이터 범위를 벗어나면 가장 최신 연도로 설정
 if 'filter_year' not in st.session_state:
-    st.session_state.filter_year = today.year
+    if today.year in AVAILABLE_YEARS:
+        st.session_state.filter_year = today.year
+    else:
+        st.session_state.filter_year = AVAILABLE_YEARS[-1] # 2025
+
 if 'filter_month' not in st.session_state:
     st.session_state.filter_month = today.month
 if 'selected_week_range' not in st.session_state:
     st.session_state.selected_week_range = None
 
 # ==========================================
-# 5. 상단 헤더 및 글로벌 필터 (위치 변경됨)
+# 5. 상단 헤더 및 글로벌 필터
 # ==========================================
 st.markdown(f"## {material_icon('agriculture', size=36, color='#34a853')} 스마트 농업 대시보드", unsafe_allow_html=True)
 
@@ -162,21 +164,24 @@ with st.container():
         c1, c2, c3 = st.columns([0.3, 0.3, 0.4])
         
         with c1:
-            sel_year = st.selectbox("연도", [2023, 2024, 2025], 
-                                  index=[2023, 2024, 2025].index(st.session_state.filter_year), 
+            # index 계산 시 안전장치 확보
+            try:
+                default_idx = AVAILABLE_YEARS.index(st.session_state.filter_year)
+            except ValueError:
+                default_idx = len(AVAILABLE_YEARS) - 1 # 에러 발생 시 마지막 연도 선택
+                
+            sel_year = st.selectbox("연도", AVAILABLE_YEARS, 
+                                  index=default_idx,
                                   key='sel_year_key', label_visibility="collapsed")
         with c2:
             sel_month = st.selectbox("월", range(1, 13), 
                                    index=st.session_state.filter_month-1, 
                                    key='sel_month_key', label_visibility="collapsed")
         
-        # 해당 연/월의 주간 목록 가져오기
         weeks_list = get_week_list(sel_year, sel_month)
-        # '전체 보기' 옵션 추가
         weeks_options = ["전체 보기"] + weeks_list
         
         with c3:
-            # 주간 선택 시 바로 session_state 업데이트
             sel_week = st.selectbox("주간 선택", weeks_options, label_visibility="collapsed")
             if sel_week == "전체 보기":
                 st.session_state.selected_week_range = None
@@ -187,7 +192,6 @@ with st.container():
     with f_col2:
         st.markdown(f"**{material_icon('filter_alt', color='#ea4335')} 작목 선택 (필터)**")
         all_tags = get_all_categories()
-        # 멀티셀렉트로 구현하되, 비어있으면 '전체'로 간주
         selected_crops = st.multiselect(
             "작목을 선택하세요 (비어있으면 전체)", 
             all_tags, 
@@ -201,7 +205,6 @@ with st.container():
 # ==========================================
 # 6. 중앙 대시보드 (필터링된 과거 기록)
 # ==========================================
-# 제목 동적 생성
 if st.session_state.selected_week_range:
     dashboard_title = f"{sel_year}년 {sel_month}월 ({st.session_state.selected_week_range})"
 else:
@@ -211,7 +214,7 @@ st.caption(f"📌 현재 조회 중: **{dashboard_title}**")
 
 with st.container(border=True):
     try:
-        # 1. 기본 SQL 구성 (날짜 기준)
+        # 1. 기본 SQL 구성
         if st.session_state.selected_week_range:
             target_week = st.session_state.selected_week_range
             query_sql = """
@@ -236,22 +239,18 @@ with st.container(border=True):
         # 2. 데이터 가져오기
         rows = con.execute(query_sql, params).fetchall()
 
-        # 3. 작목 필터링 (파이썬 레벨에서 처리 - 정확도 향상)
+        # 3. 작목 필터링
         filtered_rows = []
         if selected_crops:
             for r in rows:
-                # DB의 태그 리스트(r[3])와 선택된 작목(selected_crops) 간의 교집합 확인
-                # r[3]가 None이면 빈 리스트로 처리
                 item_tags = r[3] if r[3] else []
-                # 하나라도 겹치면 포함
                 if any(crop in item_tags for crop in selected_crops):
                     filtered_rows.append(r)
         else:
-            filtered_rows = rows  # 필터 없으면 전체
+            filtered_rows = rows
 
         # 4. 결과 출력
         if filtered_rows:
-            # 2단 그리드로 출력
             cols = st.columns(2)
             for idx, item in enumerate(filtered_rows):
                 yr, title, content, tags = item
@@ -259,7 +258,6 @@ with st.container(border=True):
                 
                 with cols[idx % 2]:
                     with st.popover(clean_title, use_container_width=True):
-                        # 내용에 태그 정보 표시 (선택사항)
                         if tags:
                             st.caption(f"태그: {', '.join(tags)}")
                         st.markdown(format_content(content))
@@ -270,7 +268,7 @@ with st.container(border=True):
         st.error(f"데이터 로드 오류: {e}")
 
 # ==========================================
-# 7. 하단 전체 검색 (독립적 기능)
+# 7. 하단 전체 검색
 # ==========================================
 st.divider()
 st.subheader("🔍 전체 검색")
@@ -291,10 +289,8 @@ with st.form("global_search_form", clear_on_submit=False):
 if search_btn and query_input:
     with st.spinner("전체 데이터베이스 검색 중..."):
         try:
-            # 1. 질문 임베딩
             query_vector = model.encode(query_input).tolist()
             
-            # 2. 벡터 검색 (필터 조건 없이 전체 검색)
             sql = """
                 SELECT 
                     year, month, title, content_md, 
@@ -307,7 +303,7 @@ if search_btn and query_input:
             
             results = con.execute(sql, [query_vector]).fetchall()
             
-            # 3. 커트라인 0.40 적용
+            # 커트라인 0.40
             valid_results = [r for r in results if r[4] >= 0.40]
             
             if not valid_results:
@@ -318,7 +314,6 @@ if search_btn and query_input:
                 for row in valid_results[:5]:
                     yr, mn, title, content, score = row
                     
-                    # 뱃지 색상
                     if score >= 0.65:
                         badge_color = "#34a853"
                         badge_text = "강력 추천"
@@ -344,7 +339,6 @@ if search_btn and query_input:
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        # 하이라이팅
                         formatted_body = format_content(content)
                         for word in query_input.split():
                             if len(word) > 1:
