@@ -567,14 +567,20 @@ if search_btn and query_input:
                         cat_display = " ".join([f"<b>[{t}]</b>" for t in tags[:3]]) + " "
                     elif "기상" in rtitle:
                         cat_display = "<b>[기상]</b> "
+                    
+                    # [수정] 제목에서 날짜([]) 제거하고 원래 제목 보여주기 (정확도 향상)
+                    clean_title = rtitle.split(']')[-1].strip() if ']' in rtitle else rtitle
 
                     with st.container(border=True):
                         st.markdown(f"""
                         <div style='display:flex; justify-content:space-between; align-items:center;'>
-                            <span class='big-font'>{cat_display}{yr}년 {mn}월 자료</span>
+                            <span class='big-font'>{cat_display}{clean_title}</span>
                             <span style='color:{badge_color}; font-weight:bold; font-size:0.9em;'>
                                 유사도 {v_score:.2f} ({match_type})
                             </span>
+                        </div>
+                        <div style='font-size:0.8em; color:gray; margin-bottom:5px;'>
+                            {yr}년 {mn}월 자료
                         </div>
                         """, unsafe_allow_html=True)
                         
