@@ -506,40 +506,30 @@ if search_btn and query_input:
         cat_filter_sql = f"AND len(list_filter(tags_crop, x -> x IN ({cat_list_str}))) > 0"
 
     with st.spinner("AI가 문서를 분석 중입니다..."):
-        # 1. 검색어 정규화 (FTS용: 명사/동사/숫자만 추출)
-        clean_query = extract_keywords(query_input)
-        
-        # 2. 임베딩 생성 (Vector용: 문맥 유지를 위해 원본 문장 사용)
-        # SBERT 모델은 문장 전체의 의미를 파악하는에 유리함
+        # 1. 질문 임베딩 (768차원 벡터 생성)
         query_vector = model.encode(query_input).tolist()
         
-        # 하이브리드 검색 SQL (Semantic 1.5배 + FTS 0.5배 가중치 결합)
-        # farm_info 테이블 사용
-        # [수정] '요약'이 포함된 제목은 상세 정보 파악에 방해되므로 제외
+        # 2. SQL 검색 (사용자 요청 기반 단순화)
+        # [핵심] ?::FLOAT[768] -> 모델에 맞춰 차원수 변경 필수
         search_sql = f"""
-        SELECT 
-            vector_score,
-            fts_score,
-            tags_crop, year, month, content_md, title
-        FROM (
             SELECT 
-                array_cosine_similarity(embedding, ?::FLOAT[768]) AS vector_score,
-                fts_main_farm_info.match_bm25(id, ?) AS fts_score,
-                tags_crop, year, month, content_md, title
+                year, 
+                month, 
+                title, 
+                content_md, 
+                tags_crop,
+                array_cosine_similarity(embedding, ?::FLOAT[768]) as score
             FROM farm_info
             WHERE 1=1 
-                {cat_filter_sql} 
+                {cat_filter_sql}
                 AND title NOT LIKE '%요약%' 
                 AND title NOT LIKE '%요 약%'
-        ) sub
-        WHERE vector_score > 0.40
-        ORDER BY (vector_score * 1.5 + fts_score * 0.5) DESC
-        LIMIT 5
+            ORDER BY score DESC
+            LIMIT 5
         """
         
         try:
-            # FTS에는 키워드만 전달하여 정확도 향상
-            results = con.execute(search_sql, [query_vector, clean_query]).fetchall()
+            results = con.execute(search_sql, [query_vector]).fetchall()
             
             if not results:
                 st.markdown(f"""
@@ -551,24 +541,27 @@ if search_btn and query_input:
                 st.success(f"총 {len(results)}건의 관련 정보를 찾았습니다.")
                 
                 for row in results:
-                    v_score, f_score, tags, yr, mn, body, rtitle = row
+                    yr, mn, rtitle, body, tags, score = row
                     
-                    # [핵심 수정] NoneType 에러 방지용 안전장치
-                    if v_score is None: v_score = 0.0
-                    if f_score is None: f_score = 0.0
+                    # [핵심 수정] NoneType 에러 방지
+                    if score is None: score = 0.0
                     
                     # 뱃지 로직
-                    badge_color = "#34a853" if v_score > 0.65 else "#fbbc04"
-                    match_type = "AI+키워드" if f_score > 0 else "AI추론"
+                    badge_color = "#34a853" if score > 0.65 else "#fbbc04"
                     
-                    # 태그 표시
-                    cat_display = ""
+                    # 태그 표시 로직 개선: 검색어와 관련 있는 태그만 표시
+                    # tags 리스트의 항목 중 query_input에 포함된 것만 필터링
+                    relevant_tags = []
                     if tags:
-                        cat_display = " ".join([f"<b>[{t}]</b>" for t in tags[:3]]) + " "
-                    elif "기상" in rtitle:
+                        relevant_tags = [t for t in tags if t in query_input]
+                    
+                    cat_display = ""
+                    if relevant_tags:
+                        cat_display = " ".join([f"<b>[{t}]</b>" for t in relevant_tags]) + " "
+                    elif "기상" in rtitle and "기상" in query_input:
                         cat_display = "<b>[기상]</b> "
                     
-                    # [수정] 제목에서 날짜([]) 제거하고 원래 제목 보여주기 (정확도 향상)
+                    # [수정] 제목에서 날짜([]) 제거하고 원래 제목 보여주기
                     clean_title = rtitle.split(']')[-1].strip() if ']' in rtitle else rtitle
 
                     with st.container(border=True):
@@ -576,7 +569,7 @@ if search_btn and query_input:
                         <div style='display:flex; justify-content:space-between; align-items:center;'>
                             <span class='big-font'>{cat_display}{clean_title}</span>
                             <span style='color:{badge_color}; font-weight:bold; font-size:0.9em;'>
-                                유사도 {v_score:.2f} ({match_type})
+                                유사도 {score:.2f}
                             </span>
                         </div>
                         <div style='font-size:0.8em; color:gray; margin-bottom:5px;'>
