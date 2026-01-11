@@ -1,6 +1,5 @@
 import streamlit as st
 import duckdb
-import torch
 from sentence_transformers import SentenceTransformer
 from datetime import datetime
 import re
@@ -107,7 +106,7 @@ def format_content(text):
 @st.cache_data(ttl=3600)
 def get_week_list(year, month):
     try:
-        # [수정] 정규식 패턴 앞에 r을 붙여 SyntaxWarning 해결
+        # SyntaxWarning 해결을 위해 r'' 문자열 사용
         sql = """
             SELECT DISTINCT regexp_extract(title, r'\[(.*?)\]', 1) as week_range 
             FROM farm_info 
@@ -128,15 +127,15 @@ def get_all_categories():
         return []
 
 # ==========================================
-# 4. 상태 관리 (수정됨)
+# 4. 상태 관리
 # ==========================================
 today = datetime.now()
-AVAILABLE_YEARS = [2023, 2024, 2025] # 데이터가 있는 연도 목록
+AVAILABLE_YEARS = [2023, 2024, 2025]
 
 if 'search_query' not in st.session_state:
     st.session_state.search_query = ""
 
-# [수정] 현재 연도가 데이터 범위를 벗어나면 가장 최신 연도로 설정
+# 연도 초기값 설정 (2026년 대응)
 if 'filter_year' not in st.session_state:
     if today.year in AVAILABLE_YEARS:
         st.session_state.filter_year = today.year
@@ -153,22 +152,22 @@ if 'selected_week_range' not in st.session_state:
 # ==========================================
 st.markdown(f"## {material_icon('agriculture', size=36, color='#34a853')} 스마트 농업 대시보드", unsafe_allow_html=True)
 
-# --- 필터 컨테이너 시작 ---
+# --- 필터 컨테이너 ---
 with st.container():
     st.markdown('<div class="filter-box">', unsafe_allow_html=True)
     f_col1, f_col2 = st.columns(2)
     
     # [1] 아카이브 (날짜 선택)
     with f_col1:
-        st.markdown(f"**{material_icon('calendar_month', color='#1a73e8')} 아카이브 (날짜 선택)**")
+        # [수정 1] 아이콘 깨짐 해결 (unsafe_allow_html=True 추가)
+        st.markdown(f"**{material_icon('calendar_month', color='#1a73e8')} 아카이브 (날짜 선택)**", unsafe_allow_html=True)
         c1, c2, c3 = st.columns([0.3, 0.3, 0.4])
         
         with c1:
-            # index 계산 시 안전장치 확보
             try:
                 default_idx = AVAILABLE_YEARS.index(st.session_state.filter_year)
             except ValueError:
-                default_idx = len(AVAILABLE_YEARS) - 1 # 에러 발생 시 마지막 연도 선택
+                default_idx = len(AVAILABLE_YEARS) - 1
                 
             sel_year = st.selectbox("연도", AVAILABLE_YEARS, 
                                   index=default_idx,
@@ -190,7 +189,8 @@ with st.container():
 
     # [2] 작목 선택 (필터)
     with f_col2:
-        st.markdown(f"**{material_icon('filter_alt', color='#ea4335')} 작목 선택 (필터)**")
+        # [수정 1] 아이콘 깨짐 해결
+        st.markdown(f"**{material_icon('filter_alt', color='#ea4335')} 작목 선택 (필터)**", unsafe_allow_html=True)
         all_tags = get_all_categories()
         selected_crops = st.multiselect(
             "작목을 선택하세요 (비어있으면 전체)", 
@@ -200,21 +200,22 @@ with st.container():
         )
     
     st.markdown('</div>', unsafe_allow_html=True)
-# --- 필터 컨테이너 끝 ---
 
 # ==========================================
 # 6. 중앙 대시보드 (필터링된 과거 기록)
 # ==========================================
+# 제목 동적 생성
 if st.session_state.selected_week_range:
     dashboard_title = f"{sel_year}년 {sel_month}월 ({st.session_state.selected_week_range})"
+    st.caption(f"📌 현재 조회 중: **{dashboard_title}**")
 else:
-    dashboard_title = f"{sel_year}년 {sel_month}월 전체"
-
-st.caption(f"📌 현재 조회 중: **{dashboard_title}**")
+    # 전체 보기 모드일 때는 3개년 비교 모드임을 명시
+    st.caption(f"📌 **{sel_month}월**의 지난 3년 농사 기록 비교")
 
 with st.container(border=True):
     try:
-        # 1. 기본 SQL 구성
+        rows = []
+        # A. 특정 주간 선택 시 -> 해당 주간 데이터만 조회
         if st.session_state.selected_week_range:
             target_week = st.session_state.selected_week_range
             query_sql = """
@@ -222,24 +223,22 @@ with st.container(border=True):
                 FROM farm_info 
                 WHERE title LIKE ?
                 AND title NOT LIKE '%요약%'
-                ORDER BY title DESC
+                ORDER BY year DESC, title DESC
             """
-            params = [f'%{target_week}%']
+            rows = con.execute(query_sql, [f'%{target_week}%']).fetchall()
+        
+        # B. 전체 보기 시 -> 선택한 '월'에 해당하는 모든 데이터 조회 (2023, 2024, 2025 모두)
         else:
             query_sql = """
                 SELECT year, title, content_md, tags_crop 
                 FROM farm_info 
-                WHERE year = ? AND month = ?
-                AND title NOT LIKE '%요약%' 
+                WHERE month = ?
                 AND content_md NOT LIKE '%목 차%'
-                ORDER BY title DESC
+                ORDER BY year DESC, title DESC
             """
-            params = [sel_year, sel_month]
+            rows = con.execute(query_sql, [sel_month]).fetchall()
 
-        # 2. 데이터 가져오기
-        rows = con.execute(query_sql, params).fetchall()
-
-        # 3. 작목 필터링
+        # 작목 필터링 적용
         filtered_rows = []
         if selected_crops:
             for r in rows:
@@ -249,18 +248,46 @@ with st.container(border=True):
         else:
             filtered_rows = rows
 
-        # 4. 결과 출력
+        # 결과 출력 (연도별 그룹화)
         if filtered_rows:
-            cols = st.columns(2)
-            for idx, item in enumerate(filtered_rows):
-                yr, title, content, tags = item
-                clean_title = title.split(']')[-1].strip() if ']' in title else title
+            # 연도별로 데이터 분류
+            grouped_by_year = {2025: [], 2024: [], 2023: []}
+            for item in filtered_rows:
+                y = item[0]
+                if y in grouped_by_year:
+                    grouped_by_year[y].append(item)
+            
+            # [수정 2 & 3] 연도별 출력 (2025 -> 2024 -> 2023)
+            for year in [2025, 2024, 2023]:
+                items = grouped_by_year[year]
                 
-                with cols[idx % 2]:
-                    with st.popover(clean_title, use_container_width=True):
-                        if tags:
-                            st.caption(f"태그: {', '.join(tags)}")
-                        st.markdown(format_content(content))
+                # 데이터가 있을 때만 출력
+                if items:
+                    st.markdown(f"##### {material_icon('calendar_today', color='#5f6368')} {year}년 기록", unsafe_allow_html=True)
+                    
+                    # [수정 3] 정렬 로직: '요약'이 제목에 있으면 0순위, 나머지는 제목순
+                    # x[1] is title
+                    sorted_items = sorted(items, key=lambda x: (0 if '요약' in x[1] or '요 약' in x[1] else 1, x[1]))
+                    
+                    # [수정 3] 최대 4개까지만 슬라이싱
+                    display_items = sorted_items[:4]
+                    
+                    cols = st.columns(2)
+                    for idx, item in enumerate(display_items):
+                        yr, title, content, tags = item
+                        clean_title = title.split(']')[-1].strip() if ']' in title else title
+                        
+                        # 요약인 경우 아이콘 추가로 강조
+                        if '요약' in title or '요 약' in title:
+                            clean_title = "⭐ " + clean_title
+
+                        with cols[idx % 2]:
+                            with st.popover(clean_title, use_container_width=True):
+                                if tags:
+                                    st.caption(f"태그: {', '.join(tags)}")
+                                st.markdown(format_content(content))
+                    
+                    st.divider() # 연도별 구분선
         else:
             st.info("조건에 맞는 데이터가 없습니다. 필터를 변경해보세요.")
 
@@ -270,7 +297,6 @@ with st.container(border=True):
 # ==========================================
 # 7. 하단 전체 검색
 # ==========================================
-st.divider()
 st.subheader("🔍 전체 검색")
 st.caption("위의 필터와 상관없이 모든 데이터베이스를 검색합니다.")
 
