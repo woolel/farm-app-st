@@ -269,6 +269,7 @@ with st.container():
         picked_date = st.date_input(
             "날짜를 선택하세요",
             value=datetime.today(),
+            format="YYYY.MM.DD",
             label_visibility="collapsed"
         )
         
