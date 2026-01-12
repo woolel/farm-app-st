@@ -135,6 +135,53 @@ def get_all_categories():
     except:
         return []
 
+
+def find_week_or_nearest(target_date):
+    try:
+        # 1. 모든 주차 정보 가져오기
+        sql = "SELECT DISTINCT regexp_extract(title, '\\[(.*?)\\]', 1) as w_range FROM farm_info WHERE title LIKE '%[%]%'"
+        rows = con.execute(sql).fetchall()
+        all_ranges = [r[0] for r in rows if r[0] and '~' in r[0]]
+        
+        best_range = None
+        min_diff = 99999
+        
+        # 2. 범위 검색
+        for r_str in all_ranges:
+            try:
+                parts = r_str.split('~')
+                if len(parts) != 2: continue
+                s_date = datetime.strptime(parts[0].strip(), "%Y-%m-%d").date()
+                e_date = datetime.strptime(parts[1].strip(), "%Y-%m-%d").date()
+                
+                # Case A: 날짜가 범위 내에 있음 (Exact Match)
+                if s_date <= target_date <= e_date:
+                    return r_str
+                
+                # Case B: 과거 데이터 중 가장 가까운 것 (Nearest Past)
+                # target_date보다 이전에 끝난 주차들 중에서, 차이가 가장 적은 것
+                if e_date < target_date:
+                    diff = (target_date - e_date).days
+                    if diff < min_diff:
+                        min_diff = diff
+                        best_range = r_str
+            except:
+                continue
+                
+        return best_range
+    except Exception as e:
+        return None
+
+def get_year_month_from_range(w_range):
+    try:
+        if not w_range: return datetime.now().year, datetime.now().month
+        date_str = w_range.split('~')[0]
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        return dt.year, dt.month
+    except:
+        return datetime.now().year, datetime.now().month
+
+
 def organize_items_smartly(items, target_date_obj):
     if not items: return []
 
@@ -214,28 +261,29 @@ with st.container():
     f_col1, f_col2 = st.columns(2)
     
     # [1] 아카이브 (날짜 선택)
+    # [1] 아카이브 (캘린더로 변경)
     with f_col1:
-        st.markdown(f"**{material_icon('calendar_month', color='#1a73e8')} 아카이브 (날짜 선택)**", unsafe_allow_html=True)
-        c1, c2, c3 = st.columns([0.3, 0.3, 0.4])
+        st.markdown(f"**{material_icon('calendar_month', color='#1a73e8')} 날짜 선택 (아카이브)**", unsafe_allow_html=True)
         
-        with c1:
-            try:
-                default_idx = AVAILABLE_YEARS.index(st.session_state.filter_year)
-            except ValueError:
-                default_idx = len(AVAILABLE_YEARS) - 1
-            sel_year = st.selectbox("연도", AVAILABLE_YEARS, index=default_idx, key='sel_year_key', label_visibility="collapsed")
-        with c2:
-            sel_month = st.selectbox("월", range(1, 13), index=st.session_state.filter_month-1, key='sel_month_key', label_visibility="collapsed")
+        # 날짜 선택 위젯
+        picked_date = st.date_input(
+            "날짜를 선택하세요",
+            value=datetime.today(),
+            label_visibility="collapsed"
+        )
         
-        weeks_list = get_week_list(sel_year, sel_month)
-        weeks_options = ["주차"] + weeks_list
+        # 선택된 날짜에 맞는 주차 검색 (Exact or Nearest Past)
+        found_range = find_week_or_nearest(picked_date)
         
-        with c3:
-            sel_week = st.selectbox("주간 선택", weeks_options, label_visibility="collapsed")
-            if sel_week == "주차":
-                st.session_state.selected_week_range = None
-            else:
-                st.session_state.selected_week_range = sel_week
+        if found_range:
+            st.session_state.selected_week_range = found_range
+            sel_year, sel_month = get_year_month_from_range(found_range)
+        else:
+            # 데이터가 아예 없는 경우
+            st.warning("데이터가 없는 구간입니다.")
+            st.session_state.selected_week_range = None
+            sel_year, sel_month = picked_date.year, picked_date.month
+
 
     # [2] 작목 선택 (필터) - 수정됨
     with f_col2:
