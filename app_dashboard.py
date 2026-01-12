@@ -251,6 +251,18 @@ if 'filter_month' not in st.session_state:
 if 'selected_week_range' not in st.session_state:
     st.session_state.selected_week_range = None
 
+# [New] 캘린더 필터 사용 여부 상태
+if 'use_calendar_filter' not in st.session_state:
+    st.session_state.use_calendar_filter = False
+
+def enable_calendar_mode():
+    st.session_state.use_calendar_filter = True
+
+def reset_to_default():
+    st.session_state.use_calendar_filter = False
+    st.session_state.selected_week_range = None
+
+
 # ==========================================
 # 5. 상단 헤더 및 글로벌 필터
 # ==========================================
@@ -262,28 +274,43 @@ with st.container():
     
     # [1] 아카이브 (날짜 선택)
     # [1] 아카이브 (캘린더로 변경)
+    # [1] 아카이브 (캘린더로 변경 + 초기화 버튼)
     with f_col1:
         st.markdown(f"**{material_icon('calendar_month', color='#1a73e8')} 날짜 선택 (아카이브)**", unsafe_allow_html=True)
         
-        # 날짜 선택 위젯
-        picked_date = st.date_input(
-            "날짜를 선택하세요",
-            value=datetime.today(),
-            format="YYYY.MM.DD",
-            label_visibility="collapsed"
-        )
+        d_col1, d_col2 = st.columns([0.7, 0.3])
         
-        # 선택된 날짜에 맞는 주차 검색 (Exact or Nearest Past)
-        found_range = find_week_or_nearest(picked_date)
+        with d_col1:
+            # 날짜 선택 위젯
+            picked_date = st.date_input(
+                "날짜를 선택하세요",
+                value=datetime.today(),
+                format="YYYY.MM.DD",
+                label_visibility="collapsed",
+                key="picked_date_widget",
+                on_change=enable_calendar_mode
+            )
         
-        if found_range:
-            st.session_state.selected_week_range = found_range
-            sel_year, sel_month = get_year_month_from_range(found_range)
+        with d_col2:
+            st.button("🔄 초기화", on_click=reset_to_default, use_container_width=True)
+        
+        # 로직 적용: 캘린더 모드일 때만 날짜 기반 검색 실행
+        if st.session_state.use_calendar_filter:
+            found_range = find_week_or_nearest(picked_date)
+            
+            if found_range:
+                st.session_state.selected_week_range = found_range
+                sel_year, sel_month = get_year_month_from_range(found_range)
+            else:
+                st.warning("데이터가 없는 구간입니다.")
+                st.session_state.selected_week_range = None
+                sel_year, sel_month = picked_date.year, picked_date.month
         else:
-            # 데이터가 아예 없는 경우
-            st.warning("데이터가 없는 구간입니다.")
+            # 기본 모드: 오늘 날짜 기준으로 초기화
             st.session_state.selected_week_range = None
-            sel_year, sel_month = picked_date.year, picked_date.month
+            sel_year = datetime.now().year
+            sel_month = datetime.now().month
+
 
 
     # [2] 작목 선택 (필터) - 수정됨
