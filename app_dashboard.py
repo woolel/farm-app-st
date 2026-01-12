@@ -210,7 +210,7 @@ if 'selected_week_range' not in st.session_state:
 st.markdown(f"## {material_icon('agriculture', size=36, color='#34a853')} 스마트 농업 대시보드", unsafe_allow_html=True)
 
 with st.container():
-    st.markdown('<div class="filter-box">', unsafe_allow_html=True)
+
     f_col1, f_col2 = st.columns(2)
     
     # [1] 아카이브 (날짜 선택)
@@ -249,7 +249,7 @@ with st.container():
             placeholder="전체 (특정 작목을 보려면 클릭하세요)", # 안내 문구 변경
             label_visibility="collapsed"
         )
-    st.markdown('</div>', unsafe_allow_html=True)
+
 
 # ==========================================
 # 6. 중앙 대시보드
