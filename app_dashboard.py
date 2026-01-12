@@ -73,22 +73,31 @@ def material_icon(name, size=20, color=None):
 # ==========================================
 # 2. 리소스 로드
 # ==========================================
-@st.cache_resource
+@st.cache_resource(show_spinner="데이터베이스 및 AI 모델 로딩 중...")
 def load_resources():
     model_name = 'jhgan/ko-sroberta-multitask'
     
-    with st.spinner("시스템 초기화 중..."):
-        try:
-            model = SentenceTransformer(model_name, device='cpu')
-            con = duckdb.connect(
-                'farming_granular.duckdb', 
-                read_only=True, 
-                config={'allow_unsigned_extensions': 'true'}
-            )
-            con.execute("INSTALL vss; LOAD vss;")
-            return model, con, "ok"
-        except Exception as e:
-            return None, None, str(e)
+    try:
+        # 1. 모델 로드
+        model = SentenceTransformer(model_name, device='cpu')
+        
+        # 2. In-Memory DuckDB 연결
+        con = duckdb.connect(database=':memory:')
+        
+        # 3. Parquet 파일 로드
+        # [Fix] HNSW 인덱스를 위해 embedding 컬럼을 FLOAT[768]로 명시적 변환
+        con.execute("CREATE TABLE farm_info AS SELECT * REPLACE (list_transform(embedding, x -> x::FLOAT)::FLOAT[768] AS embedding) FROM 'weekly_farming.parquet'")
+        
+        # 4. 인덱스 생성 (Fast Startup)
+        con.execute("INSTALL vss; LOAD vss;")
+        con.execute("CREATE INDEX embedding_idx ON farm_info USING HNSW (embedding);")
+        
+        con.execute("INSTALL fts; LOAD fts;")
+        con.execute("PRAGMA create_fts_index('farm_info', 'id', 'title', 'content_md');")
+        
+        return model, con, "ok"
+    except Exception as e:
+        return None, None, str(e)
 
 model, con, status = load_resources()
 
