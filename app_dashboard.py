@@ -376,7 +376,7 @@ with st.container(border=True):
                         icon = "📄"
                         if '요약' in title or '요 약' in title:
                             icon = "⭐"
-                            clean_title = f"<b>{clean_title}</b>"
+                            clean_title = f"**{clean_title}**"
                         elif '기상' in title:
                             icon = "⛅"
 
