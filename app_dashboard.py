@@ -346,7 +346,7 @@ with st.container():
         border-radius: 8px;
         font-size: 15px;
         border: 1px solid #d2e3fc;
-        text-align: center;
+        text-align: left;
         margin-bottom: 15px;
         line-height: 1.6;
     }
