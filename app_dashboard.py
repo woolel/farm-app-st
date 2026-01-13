@@ -270,53 +270,81 @@ def reset_to_default():
 # 5. 상단 헤더 및 필터 (변경됨)
 # ==========================================
 
-# [Dialog] 검색 조건 설정 팝업
-@st.experimental_dialog("검색 조건 설정")
-def show_search_dialog():
-    st.write("원하는 시기와 작목을 선택하세요.")
-    
-    # 1. 연도 선택
-    new_year = st.selectbox("연도 (Year)", AVAILABLE_YEARS, index=AVAILABLE_YEARS.index(st.session_state.filter_year) if st.session_state.filter_year in AVAILABLE_YEARS else 0)
-    
-    # 2. 월 선택
-    new_month = st.selectbox("월 (Month)", list(range(1, 13)), index=st.session_state.filter_month - 1)
-    
-    # 3. 주차 선택 (선택된 연/월 기준)
-    # 현재 DB에서 동적으로 가져오기
-    week_options = get_week_list(new_year, new_month)
-    
-    # 주차 기본값 처리
-    current_week_idx = 0
-    if st.session_state.selected_week_range in week_options:
-        current_week_idx = week_options.index(st.session_state.selected_week_range)
-    
-    new_week = st.selectbox(
-        "주차 (Week)", 
-        ["전체"] + week_options, 
-        index=current_week_idx + 1 if st.session_state.selected_week_range else 0
-    )
-    
-    # 4. 작목 선택
-    all_tags = get_all_categories()
-    # 기존 선택값 유지
-    default_crops = st.session_state.get('selected_crops', [])
-    new_crops = st.multiselect("작목 (Crop)", all_tags, default=default_crops)
-    
-    if st.button("적용", type="primary", use_container_width=True):
-        st.session_state.filter_year = new_year
-        st.session_state.filter_month = new_month
-        st.session_state.selected_week_range = None if new_week == "전체" else new_week
-        st.session_state.selected_crops = new_crops
-        st.session_state.use_calendar_filter = True # 필터 적용 모드 활성화
-        st.rerun()
+# ==========================================
+# 5. 상단 헤더 및 필터 (변경됨)
+# ==========================================
+
+# [Logic] 검색 모드 상태 관리
+if 'is_search_open' not in st.session_state:
+    st.session_state.is_search_open = False
+
+def toggle_search():
+    st.session_state.is_search_open = not st.session_state.is_search_open
+
+def render_search_ui():
+    """검색 조건을 설정하는 UI (Expander 사용)"""
+    with st.expander("🛠️ 검색 조건 설정 (여기를 클릭하여 닫기)", expanded=True):
+        st.write("원하는 시기와 작목을 선택 후 '적용'을 누르세요.")
+        
+        # 1. 연도 선택
+        cur_year_idx = 0
+        if st.session_state.filter_year in AVAILABLE_YEARS:
+            cur_year_idx = AVAILABLE_YEARS.index(st.session_state.filter_year)
+            
+        col1, col2 = st.columns(2)
+        with col1:
+            new_year = st.selectbox("연도 (Year)", AVAILABLE_YEARS, index=cur_year_idx, key="s_year")
+            new_month = st.selectbox("월 (Month)", list(range(1, 13)), index=st.session_state.filter_month - 1, key="s_month")
+            
+        with col2:
+            # 주차 선택 (선택된 연/월 기준)
+            week_options = get_week_list(new_year, new_month)
+            
+            # 현재 선택된 주차 인덱스 찾기
+            cur_week_idx = 0
+            if st.session_state.selected_week_range in week_options:
+                cur_week_idx = week_options.index(st.session_state.selected_week_range)
+                
+            new_week = st.selectbox(
+                "주차 (Week)", 
+                ["전체"] + week_options, 
+                index=cur_week_idx + 1 if st.session_state.selected_week_range else 0,
+                key="s_week"
+            )
+            
+        # 2. 작목 선택
+        all_tags = get_all_categories()
+        default_crops = st.session_state.get('selected_crops', [])
+        new_crops = st.multiselect("작목 (Crop)", all_tags, default=default_crops, key="s_crops")
+        
+        btn_c1, btn_c2 = st.columns(2)
+        with btn_c1:
+            if st.button("✅ 적용", type="primary", use_container_width=True):
+                st.session_state.filter_year = new_year
+                st.session_state.filter_month = new_month
+                st.session_state.selected_week_range = None if new_week == "전체" else new_week
+                st.session_state.selected_crops = new_crops
+                st.session_state.use_calendar_filter = True
+                st.session_state.is_search_open = False # 닫기
+                st.rerun()
+        with btn_c2:
+            if st.button("❌ 닫기", use_container_width=True):
+                st.session_state.is_search_open = False
+                st.rerun()
 
 # 헤더 영역
 h_col1, h_col2 = st.columns([0.8, 0.2])
 with h_col1:
     st.markdown(f"## {material_icon('agriculture', size=36, color='#34a853')} 스마트 농업 대시보드", unsafe_allow_html=True)
 with h_col2:
+    # 검색 버튼 클릭 시 상태 토글
     if st.button("🔍 조건 검색", use_container_width=True):
-        show_search_dialog()
+        toggle_search()
+        st.rerun()
+
+# 검색 UI 렌더링 (켜져있을 때만)
+if st.session_state.is_search_open:
+    render_search_ui()
 
 # 알림 바 & 초기화 버튼 영역
 with st.container():
