@@ -266,70 +266,102 @@ def reset_to_default():
 # ==========================================
 # 5. 상단 헤더 및 글로벌 필터
 # ==========================================
-st.markdown(f"## {material_icon('agriculture', size=36, color='#34a853')} 스마트 농업 대시보드", unsafe_allow_html=True)
+# ==========================================
+# 5. 상단 헤더 및 필터 (변경됨)
+# ==========================================
 
-with st.container():
-
-    f_col1, f_col2 = st.columns(2)
+# [Dialog] 검색 조건 설정 팝업
+@st.experimental_dialog("검색 조건 설정")
+def show_search_dialog():
+    st.write("원하는 시기와 작목을 선택하세요.")
     
-    # [1] 아카이브 (날짜 선택)
-    # [1] 아카이브 (캘린더로 변경)
-    # [1] 아카이브 (캘린더로 변경 + 초기화 버튼)
-    with f_col1:
-        st.markdown(f"**{material_icon('calendar_month', color='#1a73e8')} 날짜 선택 (아카이브)**", unsafe_allow_html=True)
-        
-        d_col1, d_col2 = st.columns([0.7, 0.3])
-        
-        with d_col1:
-            # 날짜 선택 위젯
-            picked_date = st.date_input(
-                "날짜를 선택하세요",
-                value=datetime.today(),
-                format="YYYY.MM.DD",
-                label_visibility="collapsed",
-                key="picked_date_widget",
-                on_change=enable_calendar_mode
-            )
-        
-        with d_col2:
-            st.button("🔄 초기화", on_click=reset_to_default, use_container_width=True)
-        
-        # 로직 적용: 캘린더 모드일 때만 날짜 기반 검색 실행
-        if st.session_state.use_calendar_filter:
-            found_range = find_week_or_nearest(picked_date)
-            
-            if found_range:
-                st.session_state.selected_week_range = found_range
-                sel_year, sel_month = get_year_month_from_range(found_range)
-            else:
-                st.warning("데이터가 없는 구간입니다.")
-                st.session_state.selected_week_range = None
-                sel_year, sel_month = picked_date.year, picked_date.month
-        else:
-            # 기본 모드: 오늘 날짜 기준으로 초기화
-            st.session_state.selected_week_range = None
-            sel_year = datetime.now().year
-            sel_month = datetime.now().month
+    # 1. 연도 선택
+    new_year = st.selectbox("연도 (Year)", AVAILABLE_YEARS, index=AVAILABLE_YEARS.index(st.session_state.filter_year) if st.session_state.filter_year in AVAILABLE_YEARS else 0)
+    
+    # 2. 월 선택
+    new_month = st.selectbox("월 (Month)", list(range(1, 13)), index=st.session_state.filter_month - 1)
+    
+    # 3. 주차 선택 (선택된 연/월 기준)
+    # 현재 DB에서 동적으로 가져오기
+    week_options = get_week_list(new_year, new_month)
+    
+    # 주차 기본값 처리
+    current_week_idx = 0
+    if st.session_state.selected_week_range in week_options:
+        current_week_idx = week_options.index(st.session_state.selected_week_range)
+    
+    new_week = st.selectbox(
+        "주차 (Week)", 
+        ["전체"] + week_options, 
+        index=current_week_idx + 1 if st.session_state.selected_week_range else 0
+    )
+    
+    # 4. 작목 선택
+    all_tags = get_all_categories()
+    # 기존 선택값 유지
+    default_crops = st.session_state.get('selected_crops', [])
+    new_crops = st.multiselect("작목 (Crop)", all_tags, default=default_crops)
+    
+    if st.button("적용", type="primary", use_container_width=True):
+        st.session_state.filter_year = new_year
+        st.session_state.filter_month = new_month
+        st.session_state.selected_week_range = None if new_week == "전체" else new_week
+        st.session_state.selected_crops = new_crops
+        st.session_state.use_calendar_filter = True # 필터 적용 모드 활성화
+        st.rerun()
 
+# 헤더 영역
+h_col1, h_col2 = st.columns([0.8, 0.2])
+with h_col1:
+    st.markdown(f"## {material_icon('agriculture', size=36, color='#34a853')} 스마트 농업 대시보드", unsafe_allow_html=True)
+with h_col2:
+    if st.button("🔍 조건 검색", use_container_width=True):
+        show_search_dialog()
 
+# 알림 바 & 초기화 버튼 영역
+with st.container():
+    # 스타일링된 알림 바를 위한 CSS
+    st.markdown("""
+    <style>
+    .notification-bar {
+        background-color: #e8f0fe;
+        color: #174ea6;
+        padding: 10px 15px;
+        border-radius: 8px;
+        font-size: 14px;
+        border: 1px solid #d2e3fc;
+        display: flex;
+        align-items: center;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
-    # [2] 작목 선택 (필터) - 수정됨
-    with f_col2:
-        st.markdown(f"**{material_icon('filter_alt', color='#ea4335')} 작목 선택 (필터)**", unsafe_allow_html=True)
-        all_tags = get_all_categories()
-        # [수정] default를 비워두어 깔끔하게 보이게 함 (Logic에서 비어있으면 전체로 처리)
-        selected_crops = st.multiselect(
-            "작목을 선택하세요", 
-            all_tags,
-            default=[], # 초기 상태 비움
-            placeholder="전체 (특정 작목을 보려면 클릭하세요)", # 안내 문구 변경
-            label_visibility="collapsed"
-        )
+    n_col1, n_col2 = st.columns([0.85, 0.15])
+    
+    with n_col1:
+        # 요청된 고정 문구 + 동적 날짜(옵션)
+        # "📌 오늘: 2026년 1월 13일 기준, ..." (사용자 요청 고정 문구)
+        # 실제 오늘 날짜를 보여주고 싶으면 datetime.now() 사용 가능하나 요청 존중
+        today_str = datetime.now().strftime("%Y년 %m월 %d일")
+        msg = f"📌 <b>오늘: 2026년 1월 13일 기준</b>, 지난 3년의 가장 유사한 시기 기록입니다."
+        st.markdown(f"<div class='notification-bar'>{msg}</div>", unsafe_allow_html=True)
+        
+    with n_col2:
+        if st.button("🔄 초기화", use_container_width=True):
+            reset_to_default()
+            st.session_state.selected_crops = [] # 작목 초기화 추가
+            st.rerun()
 
 
 # ==========================================
 # 6. 중앙 대시보드
 # ==========================================
+
+# [Logic] 필터 변수 설정
+sel_year = st.session_state.filter_year
+sel_month = st.session_state.filter_month
+selected_crops = st.session_state.get('selected_crops', [])
+
 if st.session_state.selected_week_range:
     target_date_str = st.session_state.selected_week_range.split('~')[0]
     target_date = datetime.strptime(target_date_str, "%Y-%m-%d")
@@ -338,7 +370,9 @@ if st.session_state.selected_week_range:
 else:
     target_date = datetime.now()
     dashboard_title = f"{sel_year}년 {sel_month}월 (오늘 날짜 기준 비교)"
-    st.caption(f"📌 **오늘: {target_date.year}년 {target_date.month}월 {target_date.day}일** 기준, 지난 3년의 가장 유사한 시기 기록입니다.")
+    # 이미 상단 알림 바에 내용이 있으므로 여기 caption은 제거하거나 간단한 subheader로 변경
+    # 중복 피하기 위해 제거 또는 타이틀만 표시
+
 
 with st.container(border=True):
     try:
