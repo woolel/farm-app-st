@@ -274,111 +274,92 @@ def reset_to_default():
 # 5. 상단 헤더 및 필터 (변경됨)
 # ==========================================
 
-# [Logic] 검색 모드 상태 관리
-if 'is_search_open' not in st.session_state:
-    st.session_state.is_search_open = False
-
-def toggle_search():
-    st.session_state.is_search_open = not st.session_state.is_search_open
-
-def render_search_ui():
-    """검색 조건을 설정하는 UI (Expander 사용)"""
-    with st.expander("🛠️ 검색 조건 설정 (여기를 클릭하여 닫기)", expanded=True):
-        st.write("원하는 시기와 작목을 선택 후 '적용'을 누르세요.")
-        
-        # 1. 연도 선택
-        cur_year_idx = 0
-        if st.session_state.filter_year in AVAILABLE_YEARS:
-            cur_year_idx = AVAILABLE_YEARS.index(st.session_state.filter_year)
-            
-        col1, col2 = st.columns(2)
-        with col1:
-            new_year = st.selectbox("연도 (Year)", AVAILABLE_YEARS, index=cur_year_idx, key="s_year")
-            new_month = st.selectbox("월 (Month)", list(range(1, 13)), index=st.session_state.filter_month - 1, key="s_month")
-            
-        with col2:
-            # 주차 선택 (선택된 연/월 기준)
-            week_options = get_week_list(new_year, new_month)
-            
-            # 현재 선택된 주차 인덱스 찾기
-            cur_week_idx = 0
-            if st.session_state.selected_week_range in week_options:
-                cur_week_idx = week_options.index(st.session_state.selected_week_range)
-                
-            new_week = st.selectbox(
-                "주차 (Week)", 
-                ["전체"] + week_options, 
-                index=cur_week_idx + 1 if st.session_state.selected_week_range else 0,
-                key="s_week"
-            )
-            
-        # 2. 작목 선택
-        all_tags = get_all_categories()
-        default_crops = st.session_state.get('selected_crops', [])
-        new_crops = st.multiselect("작목 (Crop)", all_tags, default=default_crops, key="s_crops")
-        
-        btn_c1, btn_c2 = st.columns(2)
-        with btn_c1:
-            if st.button("✅ 적용", type="primary", use_container_width=True):
-                st.session_state.filter_year = new_year
-                st.session_state.filter_month = new_month
-                st.session_state.selected_week_range = None if new_week == "전체" else new_week
-                st.session_state.selected_crops = new_crops
-                st.session_state.use_calendar_filter = True
-                st.session_state.is_search_open = False # 닫기
-                st.rerun()
-        with btn_c2:
-            if st.button("❌ 닫기", use_container_width=True):
-                st.session_state.is_search_open = False
-                st.rerun()
+# ==========================================
+# 5. 상단 헤더 및 필터 (변경됨)
+# ==========================================
 
 # 헤더 영역
-h_col1, h_col2 = st.columns([0.8, 0.2])
-with h_col1:
-    st.markdown(f"## {material_icon('agriculture', size=36, color='#34a853')} 스마트 농업 대시보드", unsafe_allow_html=True)
-with h_col2:
-    # 검색 버튼 클릭 시 상태 토글
-    if st.button("🔍 조건 검색", use_container_width=True):
-        toggle_search()
-        st.rerun()
+st.markdown(f"## {material_icon('agriculture', size=36, color='#34a853')} 스마트 농업 대시보드", unsafe_allow_html=True)
 
-# 검색 UI 렌더링 (켜져있을 때만)
-if st.session_state.is_search_open:
-    render_search_ui()
+# [Logic] 검색 조건 설정 (Expander 상시 배치)
+# 모바일 안정성을 위해 초기화 버튼을 이 안으로 통합
+with st.expander("🛠️ 검색 조건 설정 (여기를 클릭하여 열기/닫기)", expanded=False):
+    st.write("원하는 시기와 작목을 선택 후 '적용'을 누르세요.")
+    
+    # 1. 연도 선택
+    cur_year_idx = 0
+    if st.session_state.filter_year in AVAILABLE_YEARS:
+        cur_year_idx = AVAILABLE_YEARS.index(st.session_state.filter_year)
+        
+    col1, col2 = st.columns(2)
+    with col1:
+        new_year = st.selectbox("연도 (Year)", AVAILABLE_YEARS, index=cur_year_idx, key="s_year")
+        new_month = st.selectbox("월 (Month)", list(range(1, 13)), index=st.session_state.filter_month - 1, key="s_month")
+        
+    with col2:
+        # 주차 선택 (선택된 연/월 기준)
+        week_options = get_week_list(new_year, new_month)
+        
+        # 현재 선택된 주차 인덱스 찾기
+        cur_week_idx = 0
+        if st.session_state.selected_week_range in week_options:
+            cur_week_idx = week_options.index(st.session_state.selected_week_range)
+            
+        new_week = st.selectbox(
+            "주차 (Week)", 
+            ["전체"] + week_options, 
+            index=cur_week_idx + 1 if st.session_state.selected_week_range else 0,
+            key="s_week"
+        )
+        
+    # 2. 작목 선택
+    all_tags = get_all_categories()
+    default_crops = st.session_state.get('selected_crops', [])
+    new_crops = st.multiselect("작목 (Crop)", all_tags, default=default_crops, key="s_crops")
+    
+    btn_c1, btn_c2 = st.columns(2)
+    with btn_c1:
+        if st.button("✅ 적용", type="primary", use_container_width=True):
+            st.session_state.filter_year = new_year
+            st.session_state.filter_month = new_month
+            st.session_state.selected_week_range = None if new_week == "전체" else new_week
+            st.session_state.selected_crops = new_crops
+            st.session_state.use_calendar_filter = True
+            st.rerun()
+            
+    with btn_c2:
+        # 모바일 안정성을 위해 초기화 버튼을 이곳에 배치
+        if st.button("🔄 설정 초기화", use_container_width=True):
+            reset_to_default()
+            st.session_state.selected_crops = []
+            st.rerun()
 
-# 알림 바 & 초기화 버튼 영역
+# 알림 바 영역 (1단 통합)
 with st.container():
-    # 스타일링된 알림 바를 위한 CSS
+    # 스타일링된 알림 바를 위한 CSS (Flexbox로 줄바꿈 자연스럽게)
     st.markdown("""
     <style>
     .notification-bar {
         background-color: #e8f0fe;
         color: #174ea6;
-        padding: 10px 15px;
+        padding: 12px 15px;
         border-radius: 8px;
-        font-size: 14px;
+        font-size: 15px;
         border: 1px solid #d2e3fc;
-        display: flex;
-        align-items: center;
+        text-align: center;
+        margin-bottom: 15px;
+        line-height: 1.6;
+    }
+    .notification-highlight {
+        font-weight: bold;
+        color: #1967d2;
     }
     </style>
     """, unsafe_allow_html=True)
 
-    n_col1, n_col2 = st.columns([0.85, 0.15])
-    
-    with n_col1:
-        # 요청된 고정 문구 + 동적 날짜(옵션)
-        # "📌 오늘: 2026년 1월 13일 기준, ..." (사용자 요청 고정 문구)
-        # 실제 오늘 날짜를 보여주고 싶으면 datetime.now() 사용 가능하나 요청 존중
-        today_str = datetime.now().strftime("%Y년 %m월 %d일")
-        msg = f"📌 <b>오늘: 2026년 1월 13일 기준</b>, 지난 3년의 가장 유사한 시기 기록입니다."
-        st.markdown(f"<div class='notification-bar'>{msg}</div>", unsafe_allow_html=True)
-        
-    with n_col2:
-        if st.button("🔄 초기화", use_container_width=True):
-            reset_to_default()
-            st.session_state.selected_crops = [] # 작목 초기화 추가
-            st.rerun()
+    msg = f"📌 <span class='notification-highlight'>오늘: 2026년 1월 13일 기준</span>, 지난 3년의 가장 유사한 시기 기록입니다."
+    st.markdown(f"<div class='notification-bar'>{msg}</div>", unsafe_allow_html=True)
+
 
 
 # ==========================================
